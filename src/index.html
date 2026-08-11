@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Betterfy</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Main navigation">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">B</div>
+          <strong>Betterfy</strong>
+        </div>
+
+        <nav class="side-nav">
+          <a class="nav-item active" href="#home-view">
+            <span class="nav-icon" aria-hidden="true">⌂</span>
+            <span>Home</span>
+          </a>
+
+          <a class="nav-item" href="#search-input">
+            <span class="nav-icon" aria-hidden="true">⌕</span>
+            <span>Search</span>
+          </a>
+
+          <a class="nav-item" href="#playlists-section">
+            <span class="nav-icon" aria-hidden="true">▤</span>
+            <span>Library</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-divider"></div>
+
+        <div class="sidebar-copy">
+          <span class="eyebrow">BETTERFY</span>
+
+          <p>
+            Lightweight Spotify playback with Last.fm-powered recommendations.
+          </p>
+
+          <div id="resource-meter" class="resource-meter">
+            <div class="resource-row">
+              <span>Total RAM</span>
+              <strong id="ram-usage">-- MB</strong>
+            </div>
+
+            <div class="resource-row">
+              <span>Peak RAM</span>
+              <strong id="peak-ram-usage">-- MB</strong>
+            </div>
+
+            <div class="resource-row">
+              <span>Core</span>
+              <strong id="core-ram-usage">-- MB</strong>
+            </div>
+
+            <div class="resource-row">
+              <span>WebView / Child</span>
+              <strong id="child-ram-usage">-- MB</strong>
+            </div>
+
+            <div class="resource-row">
+              <span>CPU</span>
+              <strong id="cpu-usage">--%</strong>
+            </div>
+
+            <div class="resource-row">
+              <span>Processes</span>
+              <strong id="process-count">--</strong>
+
+              <div class="memory-test-controls">
+                <button id="memory-mode-button" type="button">
+                  Normal memory
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="search-box" role="search">
+            <span class="search-icon" aria-hidden="true">⌕</span>
+
+            <input
+              id="search-input"
+              type="search"
+              placeholder="What do you want to play?"
+              autocomplete="off"
+              aria-label="Search songs or artists"
+            />
+
+            <button
+              id="clear-search"
+              class="icon-button"
+              type="button"
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          </div>
+
+          <div class="account-area">
+            <div class="connection-copy">
+              <strong id="status">Not connected to Spotify</strong>
+              <span>Spotify Premium playback</span>
+            </div>
+
+            <button id="spotify-login" class="primary-button" type="button">
+              Connect
+            </button>
+          </div>
+        </header>
+
+        <main class="content">
+          <section id="search-view" class="music-section" hidden>
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">SEARCH</span>
+                <h2>Search results</h2>
+              </div>
+            </div>
+
+            <p id="search-status" class="section-status"></p>
+
+            <div id="search-results" class="track-list"></div>
+          </section>
+
+          <section id="similar-section" class="music-section" hidden>
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">DISCOVER</span>
+                <h2 id="similar-title">Similar Songs</h2>
+              </div>
+
+              <p id="similar-status" class="section-status"></p>
+            </div>
+
+            <div id="similar-tracks" class="track-list"></div>
+          </section>
+
+          <div id="home-view">
+            <section id="playlists-section" class="music-section">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">YOUR MUSIC</span>
+                  <h2>Playlists</h2>
+                </div>
+
+                <button
+                  id="show-create-playlist"
+                  class="secondary-button"
+                  type="button"
+                >
+                  + New playlist
+                </button>
+              </div>
+
+              <form
+                id="create-playlist-form"
+                class="create-playlist-form"
+                hidden
+              >
+                <label>
+                  <span>Name</span>
+
+                  <input
+                    id="new-playlist-name"
+                    type="text"
+                    maxlength="100"
+                    placeholder="Playlist name"
+                    required
+                  />
+                </label>
+
+                <label>
+                  <span>Description</span>
+
+                  <textarea
+                    id="new-playlist-description"
+                    maxlength="300"
+                    placeholder="Optional description"
+                  ></textarea>
+                </label>
+
+                <label class="playlist-private-option">
+                  <input id="new-playlist-private" type="checkbox" />
+
+                  <span>Private playlist</span>
+                </label>
+
+                <div class="create-playlist-buttons">
+                  <button class="primary-button compact" type="submit">
+                    Create
+                  </button>
+
+                  <button
+                    id="cancel-create-playlist"
+                    class="secondary-button"
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <p id="create-playlist-status" class="section-status"></p>
+              </form>
+
+              <div id="playlists" class="playlist-grid"></div>
+            </section>
+
+            <section id="recent-section" class="music-section">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">HISTORY</span>
+                  <h2>Recently played</h2>
+                </div>
+              </div>
+
+              <div id="recently-played" class="track-list"></div>
+            </section>
+          </div>
+
+          <section id="playlist-view" class="music-section" hidden>
+            <div class="playlist-view-header">
+              <button
+                id="close-playlist"
+                class="secondary-button"
+                type="button"
+              >
+                ← Back
+              </button>
+
+              <div>
+                <span class="eyebrow">PLAYLIST</span>
+                <h2 id="playlist-title">Playlist</h2>
+              </div>
+            </div>
+
+            <div id="playlist-tracks" class="track-list"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <footer id="player-bar" class="player-bar" hidden>
+      <div class="now-playing">
+        <img id="player-art" class="player-art" src="" alt="Album art" />
+
+        <div class="player-track-info">
+          <span id="player-title"> Nothing playing </span>
+
+          <span id="player-artist"></span>
+        </div>
+      </div>
+
+      <div class="player-center">
+        <div class="player-controls">
+          <button
+            id="previous-button"
+            class="player-icon-button"
+            type="button"
+            aria-label="Previous track"
+          >
+            ◀◀
+          </button>
+
+          <button
+            id="play-pause-button"
+            class="play-button"
+            type="button"
+            aria-label="Play or pause"
+          >
+            ▶
+          </button>
+
+          <button
+            id="next-button"
+            class="player-icon-button"
+            type="button"
+            aria-label="Next track"
+          >
+            ▶▶
+          </button>
+        </div>
+
+        <div class="progress-container">
+          <span id="current-time"> 0:00 </span>
+
+          <input
+            id="progress-slider"
+            type="range"
+            min="0"
+            max="100"
+            value="0"
+            step="0.1"
+            aria-label="Song progress"
+          />
+
+          <span id="duration-time"> 0:00 </span>
+        </div>
+      </div>
+
+      <div class="volume-control">
+        <span class="volume-icon" aria-hidden="true"> ♪ </span>
+
+        <input
+          id="volume-slider"
+          type="range"
+          min="0"
+          max="100"
+          value="50"
+          step="1"
+          aria-label="Volume"
+        />
+
+        <span id="volume-value"> 50% </span>
+      </div>
+    </footer>
+
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
+  </body>
+</html>
