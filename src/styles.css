@@ -809,13 +809,10 @@ textarea:focus-visible {
   right: 0;
   bottom: 0;
 
-  z-index: 100;
-
   height: var(--player-height);
 
   display: grid;
 
-  /* Equal left/right space keeps controls centered */
   grid-template-columns:
     minmax(0, 1fr)
     auto
@@ -823,13 +820,15 @@ textarea:focus-visible {
 
   align-items: center;
 
-  gap: clamp(8px, 2vw, 24px);
+  gap: 18px;
 
-  padding: 8px clamp(10px, 2vw, 22px);
-
-  background: #090909;
+  padding: 10px 18px;
 
   border-top: 1px solid var(--line);
+
+  background: #080808;
+
+  z-index: 1000;
 }
 
 /* =========================
@@ -837,12 +836,14 @@ textarea:focus-visible {
 ========================= */
 
 .now-playing {
-  min-width: 0;
+  justify-self: start;
 
   display: flex;
   align-items: center;
 
-  justify-self: start;
+  min-width: 0;
+
+  overflow: hidden;
 }
 
 .player-art {
@@ -901,21 +902,30 @@ textarea:focus-visible {
 ========================= */
 
 .player-center {
-  min-width: 0;
+  justify-self: center;
 
   display: flex;
   flex-direction: column;
   align-items: center;
-
-  justify-self: center;
-}
-
-.player-controls {
-  display: flex;
-  align-items: center;
   justify-content: center;
 
-  gap: clamp(4px, 1vw, 12px);
+  min-width: 0;
+}
+.progress-container {
+  width: clamp(260px, 38vw, 560px);
+
+  display: grid;
+
+  grid-template-columns:
+    36px
+    minmax(100px, 1fr)
+    36px;
+
+  align-items: center;
+
+  gap: 7px;
+
+  margin-top: 5px;
 }
 
 .player-icon-button {
@@ -1018,28 +1028,104 @@ input[type="range"] {
 ========================= */
 
 .volume-control {
-  width: clamp(105px, 15vw, 180px);
+  width: clamp(115px, 15vw, 180px);
 
   min-width: 0;
 
-  display: grid;
-
-  grid-template-columns:
-    16px
-    minmax(40px, 1fr)
-    32px;
-
+  display: flex;
   align-items: center;
 
-  gap: clamp(3px, 0.7vw, 7px);
+  gap: 7px;
 
-  justify-self: end;
+  flex-shrink: 0;
+}
+
+#volume-slider {
+  width: clamp(70px, 10vw, 120px);
 }
 
 .volume-icon {
   color: var(--muted);
 
   font-size: 13px;
+}
+
+/* =========================
+   Player control buttons
+========================= */
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+#previous-button,
+#next-button {
+  width: 34px;
+  height: 34px;
+
+  min-width: 34px;
+  min-height: 34px;
+
+  padding: 0;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 50%;
+
+  background: #ffffff;
+  color: #000000;
+
+  font-size: 13px;
+
+  cursor: pointer;
+
+  flex-shrink: 0;
+}
+
+#play-pause-button {
+  width: 42px;
+  height: 42px;
+
+  min-width: 42px;
+  min-height: 42px;
+
+  padding: 0;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 50%;
+
+  background: #ffffff;
+  color: #000000;
+
+  font-size: 16px;
+
+  cursor: pointer;
+
+  flex-shrink: 0;
+}
+
+#previous-button:hover,
+#next-button:hover,
+#play-pause-button:hover {
+  transform: scale(1.06);
+}
+
+.player-right {
+  justify-self: end;
+
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+
+  gap: 12px;
+
+  min-width: 0;
 }
 
 /* =========================
@@ -1178,4 +1264,92 @@ input[type="range"] {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* =========================
+   QUEUE
+========================= */
+.queue-add-button {
+  margin-left: auto;
+
+  border: none;
+  border-radius: 999px;
+
+  padding: 8px 14px;
+
+  background: #282828;
+  color: #ffffff;
+
+  font-size: 13px;
+  font-weight: 600;
+
+  white-space: nowrap;
+
+  cursor: pointer;
+}
+
+.queue-add-button:hover {
+  background: #3a3a3a;
+}
+
+.queue-add-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+#queue-status {
+  margin-bottom: 16px;
+
+  color: #b3b3b3;
+  font-size: 14px;
+}
+
+#close-queue {
+  border: none;
+  border-radius: 999px;
+
+  padding: 8px 14px;
+
+  background: #282828;
+  color: #ffffff;
+
+  cursor: pointer;
+}
+
+#close-queue:hover {
+  background: #3a3a3a;
+}
+
+.queue-button {
+  width: 34px;
+  height: 34px;
+
+  min-width: 34px;
+  min-height: 34px;
+
+  padding: 0;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 50%;
+
+  background: #282828;
+  color: #ffffff;
+
+  font-size: 16px;
+
+  cursor: pointer;
+
+  flex-shrink: 0;
+}
+
+.queue-button:hover {
+  background: #3a3a3a;
+  transform: scale(1.06);
+}
+
+.queue-button:hover {
+  background: #3a3a3a;
+  transform: scale(1.06);
 }

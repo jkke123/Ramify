@@ -115,6 +115,14 @@
             <button id="spotify-login" class="primary-button" type="button">
               Connect
             </button>
+            <button
+              id="spotify-logout"
+              class="secondary-button"
+              type="button"
+              hidden
+            >
+              Logout
+            </button>
           </div>
         </header>
 
@@ -214,17 +222,6 @@
 
               <div id="playlists" class="playlist-grid"></div>
             </section>
-
-            <section id="recent-section" class="music-section">
-              <div class="section-heading">
-                <div>
-                  <span class="eyebrow">HISTORY</span>
-                  <h2>Recently played</h2>
-                </div>
-              </div>
-
-              <div id="recently-played" class="track-list"></div>
-            </section>
           </div>
 
           <section id="playlist-view" class="music-section" hidden>
@@ -245,6 +242,17 @@
 
             <div id="playlist-tracks" class="track-list"></div>
           </section>
+          <section id="queue-view" class="music-section" hidden>
+            <div class="playlist-view-header">
+              <button id="close-queue" type="button">← Back</button>
+
+              <h2>Queue</h2>
+            </div>
+
+            <p id="queue-status"></p>
+
+            <div id="queue-tracks" class="track-list"></div>
+          </section>
         </main>
       </div>
     </div>
@@ -262,32 +270,11 @@
 
       <div class="player-center">
         <div class="player-controls">
-          <button
-            id="previous-button"
-            class="player-icon-button"
-            type="button"
-            aria-label="Previous track"
-          >
-            ◀◀
-          </button>
+          <button id="previous-button" title="Previous">⏮</button>
 
-          <button
-            id="play-pause-button"
-            class="play-button"
-            type="button"
-            aria-label="Play or pause"
-          >
-            ▶
-          </button>
+          <button id="play-pause-button" title="Play / Pause">▶</button>
 
-          <button
-            id="next-button"
-            class="player-icon-button"
-            type="button"
-            aria-label="Next track"
-          >
-            ▶▶
-          </button>
+          <button id="next-button" title="Next">⏭</button>
         </div>
 
         <div class="progress-container">
@@ -307,20 +294,32 @@
         </div>
       </div>
 
-      <div class="volume-control">
-        <span class="volume-icon" aria-hidden="true"> ♪ </span>
+      <div class="player-right">
+        <button
+          id="queue-button"
+          class="queue-button"
+          type="button"
+          title="View Queue"
+          aria-label="View Queue"
+        >
+          ☰
+        </button>
 
-        <input
-          id="volume-slider"
-          type="range"
-          min="0"
-          max="100"
-          value="50"
-          step="1"
-          aria-label="Volume"
-        />
+        <div class="volume-control">
+          <span class="volume-icon">🔊</span>
 
-        <span id="volume-value"> 50% </span>
+          <input
+            id="volume-slider"
+            type="range"
+            min="0"
+            max="100"
+            value="50"
+            step="1"
+            aria-label="Volume"
+          />
+
+          <span id="volume-value">50%</span>
+        </div>
       </div>
     </footer>
 

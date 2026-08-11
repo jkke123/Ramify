@@ -42,8 +42,13 @@ const TOKEN_KEYS = {
   expiresAt: "spotify_token_expires_at",
 };
 
+const VOLUME_KEY = "betterfy_volume";
+
 let spotifyPlayer = null;
 let spotifyDeviceId = null;
+
+let spotifyDeviceReady = false;
+let spotifyDeviceSetupPromise = null;
 
 let currentPosition = 0;
 let currentDuration = 0;
@@ -121,6 +126,12 @@ async function updateResourceMeter() {
 
     processCountElement.textContent = "--";
   }
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
 function startResourceMonitor() {
@@ -414,6 +425,90 @@ async function getSpotifyDevices() {
   return spotifyFetch("/me/player/devices");
 }
 
+async function waitForSpotifyDevice(deviceId, timeoutMs = 15000) {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const data = await getSpotifyDevices();
+
+      const devices = data?.devices ?? [];
+
+      console.log("Spotify devices:", devices);
+
+      const device = devices.find((item) => item.id === deviceId);
+
+      if (device) {
+        console.log("Betterfy device is registered with Spotify:", device);
+
+        return device;
+      }
+    } catch (error) {
+      console.warn("Could not check Spotify devices yet:", error);
+    }
+
+    await sleep(500);
+  }
+
+  throw new Error(
+    "Betterfy playback device did not become available in Spotify.",
+  );
+}
+
+async function ensureSpotifyDeviceReady() {
+  if (spotifyDeviceReady && spotifyDeviceId) {
+    return spotifyDeviceId;
+  }
+
+  if (!spotifyDeviceId) {
+    throw new Error("Betterfy playback device is not ready yet.");
+  }
+
+  /*
+   * If setup is already happening,
+   * wait for that same setup.
+   */
+  if (spotifyDeviceSetupPromise) {
+    await spotifyDeviceSetupPromise;
+
+    return spotifyDeviceId;
+  }
+
+  const deviceId = spotifyDeviceId;
+
+  spotifyDeviceSetupPromise = (async () => {
+    try {
+      console.log("Waiting for Spotify to register Betterfy device:", deviceId);
+
+      await waitForSpotifyDevice(deviceId);
+
+      /*
+       * Make sure Spotify didn't replace
+       * the device while we were waiting.
+       */
+      if (spotifyDeviceId !== deviceId) {
+        throw new Error("Spotify device changed while waiting.");
+      }
+
+      /*
+       * Transfer only AFTER Spotify's
+       * API confirms the device exists.
+       */
+      await transferPlaybackToTauri();
+
+      spotifyDeviceReady = true;
+
+      console.log("Betterfy Spotify device is fully ready:", deviceId);
+    } finally {
+      spotifyDeviceSetupPromise = null;
+    }
+  })();
+
+  await spotifyDeviceSetupPromise;
+
+  return spotifyDeviceId;
+}
+
 async function playTrack(trackUris, startIndex = 0) {
   const accessToken = await getValidSpotifyAccessToken();
 
@@ -421,9 +516,7 @@ async function playTrack(trackUris, startIndex = 0) {
     throw new Error("No Spotify access token");
   }
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const url =
     "https://api.spotify.com/v1/me/player/play" +
@@ -526,9 +619,7 @@ async function playPlaylist(playlistUri, position) {
     throw new Error("No Spotify access token");
   }
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const url =
     "https://api.spotify.com/v1/me/player/play" +
@@ -815,10 +906,6 @@ async function getPlaylistItems(playlistId) {
   };
 }
 
-async function getRecentlyPlayed() {
-  return spotifyFetch("/me/player/recently-played?limit=10");
-}
-
 function showHomeView() {
   const homeView = document.querySelector("#home-view");
 
@@ -826,11 +913,23 @@ function showHomeView() {
 
   const playlistView = document.querySelector("#playlist-view");
 
-  searchView.setAttribute("hidden", "");
+  const queueView = document.querySelector("#queue-view");
 
-  playlistView.setAttribute("hidden", "");
+  if (searchView) {
+    searchView.setAttribute("hidden", "");
+  }
 
-  homeView.removeAttribute("hidden");
+  if (playlistView) {
+    playlistView.setAttribute("hidden", "");
+  }
+
+  if (queueView) {
+    queueView.setAttribute("hidden", "");
+  }
+
+  if (homeView) {
+    homeView.removeAttribute("hidden");
+  }
 }
 
 function showPlaylistView() {
@@ -860,6 +959,38 @@ function showPlaylistView() {
   // Show playlist page
   if (playlistView) {
     playlistView.removeAttribute("hidden");
+  }
+}
+
+function showQueueView() {
+  const homeView = document.querySelector("#home-view");
+
+  const searchView = document.querySelector("#search-view");
+
+  const playlistView = document.querySelector("#playlist-view");
+
+  const queueView = document.querySelector("#queue-view");
+
+  const similarSection = document.querySelector("#similar-section");
+
+  if (homeView) {
+    homeView.setAttribute("hidden", "");
+  }
+
+  if (searchView) {
+    searchView.setAttribute("hidden", "");
+  }
+
+  if (playlistView) {
+    playlistView.setAttribute("hidden", "");
+  }
+
+  if (similarSection) {
+    similarSection.setAttribute("hidden", "");
+  }
+
+  if (queueView) {
+    queueView.removeAttribute("hidden");
   }
 }
 
@@ -1089,6 +1220,14 @@ function renderSearchResults(tracks) {
       </button>
 
       <button
+        class="queue-add-button"
+        type="button"
+        title="Add to queue"
+      >
+        + Queue
+      </button>
+
+      <button
         class="search-play-button"
         type="button"
         aria-label="Play ${track.name}"
@@ -1100,6 +1239,8 @@ function renderSearchResults(tracks) {
     const playButton = trackElement.querySelector(".search-play-button");
 
     const similarButton = trackElement.querySelector(".similar-button");
+
+    const queueAddButton = trackElement.querySelector(".queue-add-button");
 
     similarButton.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -1157,60 +1298,32 @@ function renderSearchResults(tracks) {
     });
 
     container.appendChild(trackElement);
-  });
-}
 
-function renderRecentlyPlayed(items) {
-  const container = document.querySelector("#recently-played");
+    queueAddButton.addEventListener("click", async (event) => {
+      event.stopPropagation();
 
-  container.innerHTML = "";
-
-  const tracks = items.map((item) => item.track);
-
-  const trackUris = tracks.map((track) => track.uri);
-
-  tracks.forEach((track, index) => {
-    const trackElement = document.createElement("div");
-
-    trackElement.className = "track-card";
-
-    const image = getSmallestSpotifyImage(track.album?.images);
-
-    const artists = track.artists.map((artist) => artist.name).join(", ");
-
-    trackElement.innerHTML = `
-      <span class="track-number">
-        ${index + 1}
-      </span>
-
-      <img
-        class="track-image"
-        src="${image}"
-        alt="${track.name}"
-        loading="lazy"
-        decoding="async"
-      />
-
-      <div class="track-info">
-        <span class="track-name">
-          ${track.name}
-        </span>
-
-        <span class="track-artist">
-          ${artists}
-        </span>
-      </div>
-    `;
-
-    trackElement.addEventListener("click", async () => {
       try {
-        await playTrack(trackUris, index);
+        queueAddButton.disabled = true;
+
+        queueAddButton.textContent = "Adding...";
+
+        await addTrackToQueue(track.uri);
+
+        queueAddButton.textContent = "✓ Queued";
+
+        setTimeout(() => {
+          queueAddButton.disabled = false;
+
+          queueAddButton.textContent = "+ Queue";
+        }, 1200);
       } catch (error) {
-        console.error("Recently played playback error:", error);
+        console.error("Add to queue error:", error);
+
+        queueAddButton.disabled = false;
+
+        queueAddButton.textContent = "Failed";
       }
     });
-
-    container.appendChild(trackElement);
   });
 }
 
@@ -1286,6 +1399,69 @@ function renderSimilarTracks(seedTrack, tracks) {
   section.removeAttribute("hidden");
 }
 
+function renderQueue(queueData) {
+  const container = document.querySelector("#queue-tracks");
+
+  const status = document.querySelector("#queue-status");
+
+  if (!container || !status) {
+    return;
+  }
+
+  container.innerHTML = "";
+
+  const tracks = queueData?.queue ?? [];
+
+  if (tracks.length === 0) {
+    status.textContent = "Your queue is empty.";
+
+    return;
+  }
+
+  status.textContent = `${tracks.length} songs queued`;
+
+  tracks.forEach((track, index) => {
+    if (!track || track.type !== "track") {
+      return;
+    }
+
+    const trackElement = document.createElement("div");
+
+    trackElement.className = "track-card";
+
+    const image = getSmallestSpotifyImage(track.album?.images);
+
+    const artists =
+      track.artists?.map((artist) => artist.name).join(", ") ?? "";
+
+    trackElement.innerHTML = `
+        <span class="track-number">
+          ${index + 1}
+        </span>
+
+        <img
+          class="track-image"
+          src="${image}"
+          alt="${track.name}"
+          loading="lazy"
+          decoding="async"
+        />
+
+        <div class="track-info">
+          <span class="track-name">
+            ${track.name}
+          </span>
+
+          <span class="track-artist">
+            ${artists}
+          </span>
+        </div>
+      `;
+
+    container.appendChild(trackElement);
+  });
+}
+
 async function getPlaybackState() {
   const accessToken = await getValidSpotifyAccessToken();
 
@@ -1311,9 +1487,7 @@ async function getPlaybackState() {
 async function pausePlayback() {
   const accessToken = await getValidSpotifyAccessToken();
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const response = await fetch(
     "https://api.spotify.com/v1/me/player/pause" +
@@ -1336,9 +1510,7 @@ async function pausePlayback() {
 async function resumePlayback() {
   const accessToken = await getValidSpotifyAccessToken();
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const response = await fetch(
     "https://api.spotify.com/v1/me/player/play" +
@@ -1361,9 +1533,7 @@ async function resumePlayback() {
 async function nextTrack() {
   const accessToken = await getValidSpotifyAccessToken();
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const response = await fetch(
     "https://api.spotify.com/v1/me/player/next" +
@@ -1386,9 +1556,7 @@ async function nextTrack() {
 async function previousTrack() {
   const accessToken = await getValidSpotifyAccessToken();
 
-  if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready");
-  }
+  await ensureSpotifyDeviceReady();
 
   const response = await fetch(
     "https://api.spotify.com/v1/me/player/previous" +
@@ -1406,6 +1574,53 @@ async function previousTrack() {
 
     throw new Error(`Previous track failed ${response.status}: ${error}`);
   }
+}
+
+async function addTrackToQueue(trackUri) {
+  const accessToken = await getValidSpotifyAccessToken();
+
+  if (!accessToken) {
+    throw new Error("No Spotify access token");
+  }
+
+  await ensureSpotifyDeviceReady();
+
+  const url =
+    "https://api.spotify.com/v1/me/player/queue" +
+    `?uri=${encodeURIComponent(trackUri)}` +
+    `&device_id=${encodeURIComponent(spotifyDeviceId)}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+
+    throw new Error(`Could not add to queue ${response.status}: ${error}`);
+  }
+}
+
+async function getSpotifyQueue() {
+  return spotifyFetch("/me/player/queue");
+}
+
+function getSavedVolume() {
+  const savedVolume = Number(localStorage.getItem(VOLUME_KEY));
+
+  if (!Number.isFinite(savedVolume) || savedVolume < 0 || savedVolume > 100) {
+    return 50;
+  }
+
+  return savedVolume;
+}
+
+function saveVolume(volume) {
+  localStorage.setItem(VOLUME_KEY, String(volume));
 }
 
 async function setPlayerVolume(volumePercent) {
@@ -1540,22 +1755,42 @@ function initializeSpotifyPlayer() {
       }
     },
 
-    volume: 0.5,
+    volume: getSavedVolume() / 100,
   });
 
   spotifyPlayer.addListener("ready", async ({ device_id }) => {
-    console.log("Betterfy playback device ready:", device_id);
+    console.log("Betterfy SDK device ready:", device_id);
 
     spotifyDeviceId = device_id;
 
+    spotifyDeviceReady = false;
+
+    spotifyDeviceSetupPromise = null;
+
+    /*
+     * Restore saved volume.
+     */
     try {
-      await transferPlaybackToTauri();
+      await spotifyPlayer.setVolume(getSavedVolume() / 100);
+    } catch (error) {
+      console.error("Could not restore saved volume:", error);
+    }
+
+    /*
+     * IMPORTANT:
+     *
+     * SDK "ready" does not necessarily
+     * mean Spotify's Web API can see the
+     * device yet.
+     */
+    try {
+      await ensureSpotifyDeviceReady();
 
       console.log("Playback transferred to Betterfy");
 
       /*
-       * Give WebView2 a moment to create
-       * its Windows audio session.
+       * Rename Windows audio session
+       * after playback device setup.
        */
       setTimeout(async () => {
         try {
@@ -1567,7 +1802,13 @@ function initializeSpotifyPlayer() {
         }
       }, 1500);
     } catch (error) {
-      console.error("Could not transfer playback:", error);
+      console.error("Could not prepare Betterfy playback device:", error);
+
+      const status = document.querySelector("#status");
+
+      if (status) {
+        status.textContent = "Spotify playback device is still connecting...";
+      }
     }
   });
 
@@ -1668,7 +1909,21 @@ function initializeSpotifyPlayer() {
   });
 
   spotifyPlayer.addListener("not_ready", ({ device_id }) => {
-    console.log("Spotify device went offline:", device_id);
+    console.error("Spotify device went offline:", device_id);
+
+    if (spotifyDeviceId === device_id) {
+      spotifyDeviceId = null;
+
+      spotifyDeviceReady = false;
+
+      spotifyDeviceSetupPromise = null;
+    }
+
+    const status = document.querySelector("#status");
+
+    if (status) {
+      status.textContent = "Spotify playback device disconnected.";
+    }
   });
 
   spotifyPlayer.addListener("initialization_error", ({ message }) => {
@@ -1677,14 +1932,32 @@ function initializeSpotifyPlayer() {
 
   spotifyPlayer.addListener("authentication_error", ({ message }) => {
     console.error("Spotify authentication error:", message);
+
+    const status = document.querySelector("#status");
+
+    if (status) {
+      status.textContent = `Spotify authentication error: ${message}`;
+    }
   });
 
   spotifyPlayer.addListener("account_error", ({ message }) => {
     console.error("Spotify account error:", message);
+
+    const status = document.querySelector("#status");
+
+    if (status) {
+      status.textContent = "Spotify Premium is required for playback.";
+    }
   });
 
   spotifyPlayer.addListener("playback_error", ({ message }) => {
     console.error("Spotify playback error:", message);
+
+    const status = document.querySelector("#status");
+
+    if (status) {
+      status.textContent = `Playback error: ${message}`;
+    }
   });
 
   spotifyPlayer.connect().then((success) => {
@@ -1718,6 +1991,7 @@ async function transferPlaybackToTauri() {
 
     body: JSON.stringify({
       device_ids: [spotifyDeviceId],
+
       play: false,
     }),
   });
@@ -1786,27 +2060,140 @@ async function loginWithSpotify() {
 
     const loginButton = document.querySelector("#spotify-login");
 
+    const logoutButton = document.querySelector("#spotify-logout");
+
     if (loginButton) {
       loginButton.setAttribute("hidden", "");
     }
 
-    const playlists = await getUserPlaylists();
+    if (logoutButton) {
+      logoutButton.removeAttribute("hidden");
+    }
 
-    const recentlyPlayed = await getRecentlyPlayed();
+    const playlists = await getUserPlaylists();
 
     console.log("Playlists:", playlists);
 
-    console.log("Recently played:", recentlyPlayed);
-
     renderPlaylists(playlists.items);
-
-    renderRecentlyPlayed(recentlyPlayed.items);
 
     await updatePlayer();
   } catch (error) {
     console.error("Betterfy startup error:", error);
 
     document.querySelector("#status").textContent = `Error: ${error.message}`;
+  }
+}
+
+async function logoutSpotify() {
+  try {
+    /*
+     * Disconnect the Web Playback SDK.
+     */
+    if (spotifyPlayer) {
+      spotifyPlayer.disconnect();
+      spotifyPlayer = null;
+    }
+
+    spotifyDeviceId = null;
+    spotifyDeviceReady = false;
+    spotifyDeviceSetupPromise = null;
+
+    /*
+     * Stop local playback/progress state.
+     */
+    isCurrentlyPlaying = false;
+    currentPosition = 0;
+    currentDuration = 0;
+
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
+    /*
+     * Remove saved Spotify authorization.
+     */
+    clearSpotifyTokens();
+
+    /*
+     * Remove any leftover PKCE state.
+     */
+    sessionStorage.removeItem("spotify_code_verifier");
+
+    /*
+     * Reset buttons.
+     */
+    const loginButton = document.querySelector("#spotify-login");
+
+    const logoutButton = document.querySelector("#spotify-logout");
+
+    if (loginButton) {
+      loginButton.removeAttribute("hidden");
+
+      loginButton.disabled = false;
+      loginButton.textContent = "Connect";
+    }
+
+    if (logoutButton) {
+      logoutButton.setAttribute("hidden", "");
+    }
+
+    /*
+     * Reset status.
+     */
+    const status = document.querySelector("#status");
+
+    if (status) {
+      status.textContent = "Not connected to Spotify";
+    }
+
+    /*
+     * Hide player.
+     */
+    const playerBar = document.querySelector("#player-bar");
+
+    if (playerBar) {
+      playerBar.setAttribute("hidden", "");
+    }
+
+    /*
+     * Clear user-specific content.
+     */
+    const playlists = document.querySelector("#playlists");
+
+    const searchResults = document.querySelector("#search-results");
+
+    const playlistTracks = document.querySelector("#playlist-tracks");
+
+    if (playlists) {
+      playlists.innerHTML = "";
+    }
+
+    if (searchResults) {
+      searchResults.innerHTML = "";
+    }
+
+    if (playlistTracks) {
+      playlistTracks.innerHTML = "";
+    }
+
+    clearSimilarResults();
+
+    /*
+     * Reset playlist state.
+     */
+    currentPlaylistItems = [];
+    currentPlaylist = null;
+    renderedPlaylistCount = 0;
+
+    /*
+     * Return to home.
+     */
+    showHomeView();
+
+    console.log("Spotify logout complete");
+  } catch (error) {
+    console.error("Spotify logout error:", error);
   }
 }
 
@@ -1832,8 +2219,14 @@ async function restoreSpotifySession() {
 
     const loginButton = document.querySelector("#spotify-login");
 
+    const logoutButton = document.querySelector("#spotify-logout");
+
     if (loginButton) {
       loginButton.removeAttribute("hidden");
+    }
+
+    if (logoutButton) {
+      logoutButton.setAttribute("hidden", "");
     }
 
     return false;
@@ -1853,20 +2246,22 @@ async function restoreSpotifySession() {
 
     const loginButton = document.querySelector("#spotify-login");
 
+    const logoutButton = document.querySelector("#spotify-logout");
+
     if (loginButton) {
       loginButton.setAttribute("hidden", "");
     }
 
-    const [playlists, recentlyPlayed] = await Promise.all([
-      getUserPlaylists(),
-      getRecentlyPlayed(),
-    ]);
+    if (logoutButton) {
+      logoutButton.removeAttribute("hidden");
+    }
+
+    const playlists = await getUserPlaylists();
 
     renderPlaylists(playlists.items ?? []);
-    renderRecentlyPlayed(recentlyPlayed.items ?? []);
 
     if (window.Spotify) {
-      // initializeSpotifyPlayer();
+      initializeSpotifyPlayer();
     }
 
     await updatePlayer();
@@ -1890,15 +2285,27 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const loginButton = document.querySelector("#spotify-login");
 
+  const logoutButton = document.querySelector("#spotify-logout");
+
   const playPauseButton = document.querySelector("#play-pause-button");
 
   const nextButton = document.querySelector("#next-button");
+
+  const queueButton = document.querySelector("#queue-button");
+
+  const closeQueueButton = document.querySelector("#close-queue");
 
   const previousButton = document.querySelector("#previous-button");
 
   const volumeSlider = document.querySelector("#volume-slider");
 
   const volumeValue = document.querySelector("#volume-value");
+
+  const savedVolume = getSavedVolume();
+
+  volumeSlider.value = String(savedVolume);
+
+  volumeValue.textContent = `${savedVolume}%`;
 
   const progressSlider = document.querySelector("#progress-slider");
 
@@ -1943,6 +2350,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const memoryModeButton = document.querySelector("#memory-mode-button");
 
   loginButton.addEventListener("click", loginWithSpotify);
+
+  logoutButton.addEventListener("click", logoutSpotify);
 
   playPauseButton.addEventListener("click", async () => {
     try {
@@ -1993,14 +2402,28 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   volumeSlider.addEventListener("input", async () => {
-    try {
-      const volume = Number(volumeSlider.value);
+    const volume = Number(volumeSlider.value);
 
-      volumeValue.textContent = `${volume}%`;
+    /*
+     * Update the displayed percentage.
+     */
+    volumeValue.textContent = `${volume}%`;
 
-      await setPlayerVolume(volume);
-    } catch (error) {
-      console.error("Volume error:", error);
+    /*
+     * Persist it immediately.
+     */
+    saveVolume(volume);
+
+    /*
+     * If Spotify Player exists,
+     * update actual playback volume.
+     */
+    if (spotifyPlayer) {
+      try {
+        await setPlayerVolume(volume);
+      } catch (error) {
+        console.error("Volume error:", error);
+      }
     }
   });
 
@@ -2194,5 +2617,37 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
+  if (queueButton) {
+    queueButton.addEventListener("click", async () => {
+      try {
+        const queue = await getSpotifyQueue();
+
+        renderQueue(queue);
+
+        showQueueView();
+      } catch (error) {
+        console.error("Could not load queue:", error);
+
+        const status = document.querySelector("#queue-status");
+
+        if (status) {
+          status.textContent = "Could not load queue.";
+        }
+
+        showQueueView();
+      }
+    });
+  }
+  if (closeQueueButton) {
+    closeQueueButton.addEventListener("click", () => {
+      const container = document.querySelector("#queue-tracks");
+
+      if (container) {
+        container.innerHTML = "";
+      }
+
+      showHomeView();
+    });
+  }
   void restoreSpotifySession();
 });
