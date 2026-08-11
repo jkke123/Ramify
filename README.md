@@ -13,6 +13,10 @@ It uses WebView2 Low mode, as well as removing lots of different features that m
 3. Add a .env file, following the .env.example format, adding your respective API keys
 4. Run
 ```
+npm install
+```
+5. Run
+```
 npm run tauri build
 ```
 To get the executable file
