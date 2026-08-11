@@ -425,7 +425,7 @@ async function getSpotifyDevices() {
   return spotifyFetch("/me/player/devices");
 }
 
-async function waitForSpotifyDevice(deviceId, timeoutMs = 15000) {
+async function waitForSpotifyDevice(deviceId, timeoutMs = 5000) {
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeoutMs) {
@@ -464,10 +464,6 @@ async function ensureSpotifyDeviceReady() {
     throw new Error("Betterfy playback device is not ready yet.");
   }
 
-  /*
-   * If setup is already happening,
-   * wait for that same setup.
-   */
   if (spotifyDeviceSetupPromise) {
     await spotifyDeviceSetupPromise;
 
@@ -478,21 +474,33 @@ async function ensureSpotifyDeviceReady() {
 
   spotifyDeviceSetupPromise = (async () => {
     try {
-      console.log("Waiting for Spotify to register Betterfy device:", deviceId);
-
-      await waitForSpotifyDevice(deviceId);
+      console.log("Preparing Betterfy Spotify device:", deviceId);
 
       /*
-       * Make sure Spotify didn't replace
-       * the device while we were waiting.
+       * Give Spotify Connect a short
+       * chance to expose the SDK device
+       * through /me/player/devices.
+       *
+       * Some systems never expose it
+       * there promptly even though the
+       * Web Playback SDK fired "ready".
        */
+      try {
+        await waitForSpotifyDevice(deviceId, 5000);
+      } catch (error) {
+        console.warn(
+          "Betterfy device was not listed by Spotify; trying direct transfer:",
+          error,
+        );
+      }
+
       if (spotifyDeviceId !== deviceId) {
-        throw new Error("Spotify device changed while waiting.");
+        throw new Error("Spotify device changed while connecting.");
       }
 
       /*
-       * Transfer only AFTER Spotify's
-       * API confirms the device exists.
+       * Use the device_id supplied
+       * directly by the SDK.
        */
       await transferPlaybackToTauri();
 
@@ -508,7 +516,6 @@ async function ensureSpotifyDeviceReady() {
 
   return spotifyDeviceId;
 }
-
 async function playTrack(trackUris, startIndex = 0) {
   const accessToken = await getValidSpotifyAccessToken();
 
