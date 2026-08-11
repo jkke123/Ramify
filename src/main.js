@@ -1743,7 +1743,7 @@ function initializeSpotifyPlayer() {
     return;
   }
 
-  spotifyPlayer = new Spotify.Player({
+  const player = new Spotify.Player({
     name: "Betterfy Desktop",
 
     getOAuthToken: async (callback) => {
@@ -1765,7 +1765,14 @@ function initializeSpotifyPlayer() {
     volume: getSavedVolume() / 100,
   });
 
-  spotifyPlayer.addListener("ready", async ({ device_id }) => {
+  spotifyPlayer = player;
+
+  player.addListener("ready", async ({ device_id }) => {
+    if (spotifyPlayer !== player) {
+      console.log("Ignoring ready event from old Spotify player:", device_id);
+
+      return;
+    }
     console.log("Betterfy SDK device ready:", device_id);
 
     spotifyDeviceId = device_id;
@@ -1778,7 +1785,7 @@ function initializeSpotifyPlayer() {
      * Restore saved volume.
      */
     try {
-      await spotifyPlayer.setVolume(getSavedVolume() / 100);
+      await player.setVolume(getSavedVolume() / 100);
     } catch (error) {
       console.error("Could not restore saved volume:", error);
     }
@@ -1819,7 +1826,10 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.addListener("player_state_changed", (state) => {
+  player.addListener("player_state_changed", (state) => {
+    if (spotifyPlayer !== player) {
+      return;
+    }
     if (!state) {
       return;
     }
@@ -1915,14 +1925,25 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.addListener("not_ready", ({ device_id }) => {
+  player.addListener("not_ready", ({ device_id }) => {
+    /*
+     * An old disconnected SDK player can
+     * still emit this event. Ignore it.
+     */
+    if (spotifyPlayer !== player) {
+      console.log(
+        "Ignoring not_ready event from old Spotify player:",
+        device_id,
+      );
+
+      return;
+    }
+
     console.error("Spotify device went offline:", device_id);
 
     if (spotifyDeviceId === device_id) {
       spotifyDeviceId = null;
-
       spotifyDeviceReady = false;
-
       spotifyDeviceSetupPromise = null;
     }
 
@@ -1933,11 +1954,19 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.addListener("initialization_error", ({ message }) => {
+  player.addListener("initialization_error", ({ message }) => {
+    if (spotifyPlayer !== player) {
+      return;
+    }
+
     console.error("Spotify initialization error:", message);
   });
 
-  spotifyPlayer.addListener("authentication_error", ({ message }) => {
+  player.addListener("authentication_error", ({ message }) => {
+    if (spotifyPlayer !== player) {
+      return;
+    }
+
     console.error("Spotify authentication error:", message);
 
     const status = document.querySelector("#status");
@@ -1947,7 +1976,11 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.addListener("account_error", ({ message }) => {
+  player.addListener("account_error", ({ message }) => {
+    if (spotifyPlayer !== player) {
+      return;
+    }
+
     console.error("Spotify account error:", message);
 
     const status = document.querySelector("#status");
@@ -1957,7 +1990,11 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.addListener("playback_error", ({ message }) => {
+  player.addListener("playback_error", ({ message }) => {
+    if (spotifyPlayer !== player) {
+      return;
+    }
+
     console.error("Spotify playback error:", message);
 
     const status = document.querySelector("#status");
@@ -1967,7 +2004,15 @@ function initializeSpotifyPlayer() {
     }
   });
 
-  spotifyPlayer.connect().then((success) => {
+  player.connect().then((success) => {
+    /*
+     * Ignore completion from a player that
+     * was logged out while connecting.
+     */
+    if (spotifyPlayer !== player) {
+      return;
+    }
+
     console.log("Spotify player connect result:", success);
 
     if (success) {
@@ -2012,6 +2057,11 @@ async function transferPlaybackToTauri() {
 
 async function loginWithSpotify() {
   try {
+    /*
+     * If logout cleanup is still running,
+     * wait before starting another session.
+     */
+
     const verifier = generateRandomString(64);
 
     const hashed = await sha256(verifier);
@@ -2052,10 +2102,6 @@ async function loginWithSpotify() {
     // Save access token
     saveSpotifyTokens(tokenData);
 
-    if (window.Spotify) {
-      initializeSpotifyPlayer();
-    }
-
     // Use the access token to get the user's Spotify profile
     const profile = await getSpotifyProfile(tokenData.access_token);
 
@@ -2083,6 +2129,14 @@ async function loginWithSpotify() {
 
     renderPlaylists(playlists.items);
 
+    /*
+     * New account/session is now established.
+     * Create the Web Playback SDK player LAST.
+     */
+    if (window.Spotify) {
+      initializeSpotifyPlayer();
+    }
+
     await updatePlayer();
   } catch (error) {
     console.error("Betterfy startup error:", error);
@@ -2093,20 +2147,27 @@ async function loginWithSpotify() {
 
 async function logoutSpotify() {
   try {
+    console.log("Logging out of Spotify...");
+
     /*
-     * Disconnect the Web Playback SDK.
+     * Disconnect the current SDK player.
      */
     if (spotifyPlayer) {
-      spotifyPlayer.disconnect();
-      spotifyPlayer = null;
+      try {
+        spotifyPlayer.disconnect();
+      } catch (error) {
+        console.warn("Spotify player disconnect warning:", error);
+      }
     }
+
+    spotifyPlayer = null;
 
     spotifyDeviceId = null;
     spotifyDeviceReady = false;
     spotifyDeviceSetupPromise = null;
 
     /*
-     * Stop local playback/progress state.
+     * Stop Betterfy's local playback state.
      */
     isCurrentlyPlaying = false;
     currentPosition = 0;
@@ -2114,48 +2175,20 @@ async function logoutSpotify() {
 
     if (progressTimer) {
       clearInterval(progressTimer);
+
       progressTimer = null;
     }
 
     /*
-     * Remove saved Spotify authorization.
+     * Delete Spotify authorization.
      */
     clearSpotifyTokens();
 
-    /*
-     * Remove any leftover PKCE state.
-     */
     sessionStorage.removeItem("spotify_code_verifier");
 
     /*
-     * Reset buttons.
-     */
-    const loginButton = document.querySelector("#spotify-login");
-
-    const logoutButton = document.querySelector("#spotify-logout");
-
-    if (loginButton) {
-      loginButton.removeAttribute("hidden");
-
-      loginButton.disabled = false;
-      loginButton.textContent = "Connect";
-    }
-
-    if (logoutButton) {
-      logoutButton.setAttribute("hidden", "");
-    }
-
-    /*
-     * Reset status.
-     */
-    const status = document.querySelector("#status");
-
-    if (status) {
-      status.textContent = "Not connected to Spotify";
-    }
-
-    /*
-     * Hide player.
+     * Clear anything Spotify-specific
+     * from the UI before reload.
      */
     const playerBar = document.querySelector("#player-bar");
 
@@ -2163,42 +2196,45 @@ async function logoutSpotify() {
       playerBar.setAttribute("hidden", "");
     }
 
-    /*
-     * Clear user-specific content.
-     */
     const playlists = document.querySelector("#playlists");
-
-    const searchResults = document.querySelector("#search-results");
-
-    const playlistTracks = document.querySelector("#playlist-tracks");
 
     if (playlists) {
       playlists.innerHTML = "";
     }
 
-    if (searchResults) {
-      searchResults.innerHTML = "";
-    }
+    const playlistTracks = document.querySelector("#playlist-tracks");
 
     if (playlistTracks) {
       playlistTracks.innerHTML = "";
     }
 
-    clearSimilarResults();
+    const searchResults = document.querySelector("#search-results");
 
-    /*
-     * Reset playlist state.
-     */
+    if (searchResults) {
+      searchResults.innerHTML = "";
+    }
+
+    const queueTracks = document.querySelector("#queue-tracks");
+
+    if (queueTracks) {
+      queueTracks.innerHTML = "";
+    }
+
     currentPlaylistItems = [];
     currentPlaylist = null;
     renderedPlaylistCount = 0;
 
-    /*
-     * Return to home.
-     */
-    showHomeView();
+    clearSimilarResults();
 
-    console.log("Spotify logout complete");
+    console.log("Spotify logout complete. Reloading Betterfy...");
+
+    /*
+     * IMPORTANT:
+     *
+     * Completely reset the Spotify Web
+     * Playback SDK and WebView JS state.
+     */
+    window.location.reload();
   } catch (error) {
     console.error("Spotify logout error:", error);
   }
