@@ -2,7 +2,7 @@
 
 A Spotify API/LAST.FM API application designed to use less memory than the current Spotify desktop app
 
-It uses over 60% less memory overall compared to the Spotify desktop app, with results coming out to around 200-400 MB of memory.
+It uses up to 60% less memory overall compared to the Spotify desktop app, with results coming out to around 200-400 MB of memory.
 
 It uses WebView2 Low mode, as well as removing lots of different features that might add unnecessary memory usage.
 
