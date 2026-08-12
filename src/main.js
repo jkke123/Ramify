@@ -54,6 +54,13 @@ let currentPosition = 0;
 let currentDuration = 0;
 let isCurrentlyPlaying = false;
 
+let repeatMode = "off";
+let repeatChangeInProgress = false;
+
+let shuffleEnabled = false;
+
+let lastQueueTrackId = null;
+
 let progressTimer = null;
 let isSeeking = false;
 
@@ -64,6 +71,29 @@ let lowMemoryModeEnabled = true;
 let currentPlaylistItems = [];
 let currentPlaylist = null;
 let renderedPlaylistCount = 0;
+
+const RECENT_PLAYLISTS_KEY = "betterfy_recent_playlists";
+const MAX_RECENT_PLAYLISTS = 50;
+const PLAYLIST_PAGE_SIZE = 30;
+
+let playlistReturnView = "home";
+let allPlaylistsOffset = 0;
+let allPlaylistsLoading = false;
+let allPlaylistsFinished = false;
+
+let searchRequestId = 0;
+
+let artistRequestId = 0;
+
+let currentDiscographyArtist = null;
+
+let discographyOffset = 0;
+let discographyLoading = false;
+let discographyFinished = false;
+
+let releaseReturnView = "artist";
+
+const DISCOGRAPHY_PAGE_SIZE = 10;
 
 const PLAYLIST_RENDER_BATCH_SIZE = 30;
 
@@ -619,7 +649,7 @@ async function startAutoplayFromTrack(track) {
   }
 }
 
-async function playPlaylist(playlistUri, position) {
+async function setSpotifyShuffle(enabled) {
   const accessToken = await getValidSpotifyAccessToken();
 
   if (!accessToken) {
@@ -627,6 +657,144 @@ async function playPlaylist(playlistUri, position) {
   }
 
   await ensureSpotifyDeviceReady();
+
+  const url =
+    "https://api.spotify.com/v1/me/player/shuffle" +
+    `?state=${enabled ? "true" : "false"}` +
+    `&device_id=${encodeURIComponent(spotifyDeviceId)}`;
+
+  const response = await fetch(url, {
+    method: "PUT",
+
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+
+    throw new Error(`Shuffle failed ${response.status}: ${error}`);
+  }
+}
+
+function updateShuffleButton() {
+  const shuffleButton = document.querySelector("#shuffle-button");
+
+  if (!shuffleButton) {
+    return;
+  }
+
+  shuffleButton.classList.toggle("shuffle-active", shuffleEnabled);
+
+  shuffleButton.title = shuffleEnabled ? "Shuffle on" : "Shuffle off";
+  shuffleButton.setAttribute(
+    "aria-label",
+    shuffleEnabled ? "Shuffle on" : "Shuffle off",
+  );
+  shuffleButton.setAttribute("aria-pressed", String(shuffleEnabled));
+}
+
+async function setSpotifyRepeat(mode) {
+  const accessToken = await getValidSpotifyAccessToken();
+
+  if (!accessToken) {
+    throw new Error("No Spotify access token");
+  }
+
+  await ensureSpotifyDeviceReady();
+
+  const url =
+    "https://api.spotify.com/v1/me/player/repeat" +
+    `?state=${encodeURIComponent(mode)}` +
+    `&device_id=${encodeURIComponent(spotifyDeviceId)}`;
+
+  const response = await fetch(url, {
+    method: "PUT",
+
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+
+    throw new Error(`Repeat failed ${response.status}: ${error}`);
+  }
+
+  // Spotify returns 204 before every client necessarily
+  // reflects the changed playback state.
+  await sleep(150);
+
+  const playback = await getPlaybackState();
+
+  if (playback?.repeat_state) {
+    repeatMode = playback.repeat_state;
+  }
+
+  updateRepeatButton();
+
+  console.log("Spotify repeat mode:", repeatMode);
+}
+
+function updateRepeatButton() {
+  const repeatButton = document.querySelector("#repeat-button");
+
+  if (!repeatButton) {
+    return;
+  }
+
+  repeatButton.classList.remove("repeat-active", "repeat-one");
+
+  if (repeatMode === "context") {
+    repeatButton.classList.add("repeat-active");
+
+    repeatButton.title = "Repeat playlist";
+    repeatButton.setAttribute("aria-label", "Repeat playlist");
+    repeatButton.setAttribute("aria-pressed", "true");
+
+    return;
+  }
+
+  if (repeatMode === "track") {
+    repeatButton.classList.add("repeat-active", "repeat-one");
+
+    repeatButton.title = "Repeat song";
+    repeatButton.setAttribute("aria-label", "Repeat song");
+    repeatButton.setAttribute("aria-pressed", "true");
+
+    return;
+  }
+
+  repeatButton.title = "Repeat off";
+  repeatButton.setAttribute("aria-label", "Repeat off");
+  repeatButton.setAttribute("aria-pressed", "false");
+}
+
+async function playContext(contextUri, position = 0, shuffle = false) {
+  const accessToken = await getValidSpotifyAccessToken();
+
+  if (!accessToken) {
+    throw new Error("No Spotify access token");
+  }
+
+  await ensureSpotifyDeviceReady();
+
+  // Explicitly control Spotify's shuffle state.
+  // This prevents a previous shuffle session from affecting
+  // normal album/playlist playback.
+  await setSpotifyShuffle(shuffle);
+
+  // Keep Betterfy's local shuffle state synchronized
+  // with the state we just sent to Spotify.
+  shuffleEnabled = shuffle;
+  updateShuffleButton();
+
+  // Spotify does not guarantee ordering between separate
+  // Player API commands. Give the shuffle command a moment
+  // to take effect before starting the new context.
+  await sleep(100);
 
   const url =
     "https://api.spotify.com/v1/me/player/play" +
@@ -637,15 +805,14 @@ async function playPlaylist(playlistUri, position) {
 
     headers: {
       Authorization: `Bearer ${accessToken}`,
-
       "Content-Type": "application/json",
     },
 
     body: JSON.stringify({
-      context_uri: playlistUri,
+      context_uri: contextUri,
 
       offset: {
-        position: position,
+        position,
       },
 
       position_ms: 0,
@@ -655,11 +822,11 @@ async function playPlaylist(playlistUri, position) {
   if (!response.ok) {
     const error = await response.text();
 
-    throw new Error(`Playlist playback failed ${response.status}: ${error}`);
+    throw new Error(`Context playback failed ${response.status}: ${error}`);
   }
 }
 
-async function searchSpotify(query) {
+async function searchSpotify(query, types = "track", limit = 10) {
   const trimmedQuery = query.trim();
 
   if (!trimmedQuery) {
@@ -667,12 +834,68 @@ async function searchSpotify(query) {
       tracks: {
         items: [],
       },
+      artists: {
+        items: [],
+      },
     };
   }
 
   const encodedQuery = encodeURIComponent(trimmedQuery);
+  const encodedTypes = encodeURIComponent(types);
 
-  return spotifyFetch(`/search?q=${encodedQuery}&type=track&limit=10`);
+  return spotifyFetch(
+    `/search?q=${encodedQuery}&type=${encodedTypes}&limit=${limit}`,
+  );
+}
+
+async function getArtistTopTracks(artist) {
+  const params = new URLSearchParams({
+    method: "artist.gettoptracks",
+    artist: artist.name,
+    api_key: LASTFM_API_KEY,
+    format: "json",
+    limit: "5",
+    autocorrect: "1",
+  });
+
+  const response = await fetch(
+    `https://ws.audioscrobbler.com/2.0/?${params.toString()}`,
+  );
+
+  if (!response.ok) {
+    throw new Error(`Last.fm artist top tracks failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(`Last.fm error ${data.error}: ${data.message}`);
+  }
+
+  const lastFmTracks = data.toptracks?.track ?? [];
+
+  const spotifyTracks = [];
+
+  for (const lastFmTrack of lastFmTracks.slice(0, 5)) {
+    const spotifyTrack = await findSpotifyTrack(artist.name, lastFmTrack.name);
+
+    if (spotifyTrack) {
+      spotifyTracks.push(spotifyTrack);
+    }
+
+    if (spotifyTracks.length === 5) {
+      break;
+    }
+  }
+
+  return spotifyTracks;
+}
+
+async function getArtistAlbums(artistId, offset = 0, limit = 10) {
+  return spotifyFetch(
+    `/artists/${encodeURIComponent(artistId)}/albums` +
+      `?include_groups=album,single&limit=${limit}&offset=${offset}`,
+  );
 }
 
 function normalizeText(value) {
@@ -681,6 +904,28 @@ function normalizeText(value) {
     .replace(/[^\p{L}\p{N}\s]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+async function getReleaseTracks(releaseId) {
+  const tracks = [];
+
+  let endpoint = `/albums/${encodeURIComponent(releaseId)}/tracks?limit=50`;
+
+  while (endpoint) {
+    const data = await spotifyFetch(endpoint);
+
+    tracks.push(...(data.items ?? []));
+
+    if (data.next) {
+      const nextUrl = new URL(data.next);
+
+      endpoint = nextUrl.pathname.replace("/v1", "") + nextUrl.search;
+    } else {
+      endpoint = null;
+    }
+  }
+
+  return tracks;
 }
 
 async function findSpotifyTrack(artist, trackName) {
@@ -820,8 +1065,31 @@ async function getSpotifySimilarTracks(track) {
   return cleanedResults;
 }
 
-async function getUserPlaylists() {
-  return spotifyFetch("/me/playlists?limit=12");
+async function getUserPlaylists(limit = 5, offset = 0) {
+  return spotifyFetch(`/me/playlists?limit=${limit}&offset=${offset}`);
+}
+
+function getRecentPlaylistIds() {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(RECENT_PLAYLISTS_KEY) ?? "[]",
+    );
+
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function markPlaylistOpened(playlistId) {
+  const recentIds = getRecentPlaylistIds();
+
+  const updatedIds = [
+    playlistId,
+    ...recentIds.filter((id) => id !== playlistId),
+  ].slice(0, MAX_RECENT_PLAYLISTS);
+
+  localStorage.setItem(RECENT_PLAYLISTS_KEY, JSON.stringify(updatedIds));
 }
 
 async function getSimilarTracks(artist, trackName, limit = 20) {
@@ -884,9 +1152,13 @@ async function createSpotifyPlaylist(name, description, isPrivate) {
 }
 
 async function refreshPlaylists() {
-  const playlists = await getUserPlaylists();
+  await loadHomePlaylists();
 
-  renderPlaylists(playlists.items);
+  const playlistsView = document.querySelector("#playlists-view");
+
+  if (playlistsView && !playlistsView.hasAttribute("hidden")) {
+    await openPlaylistsPage();
+  }
 }
 
 async function getPlaylistItems(playlistId) {
@@ -915,90 +1187,221 @@ async function getPlaylistItems(playlistId) {
 
 function showHomeView() {
   const homeView = document.querySelector("#home-view");
-
   const searchView = document.querySelector("#search-view");
-
+  const playlistsView = document.querySelector("#playlists-view");
   const playlistView = document.querySelector("#playlist-view");
-
   const queueView = document.querySelector("#queue-view");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const similarSection = document.querySelector("#similar-section");
+  const discographyView = document.querySelector("#artist-discography-view");
 
-  if (searchView) {
-    searchView.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  homeView?.removeAttribute("hidden");
+  releaseView?.setAttribute("hidden", "");
+  discographyView?.setAttribute("hidden", "");
+}
+
+function showPlaylistsView() {
+  const homeView = document.querySelector("#home-view");
+  const searchView = document.querySelector("#search-view");
+  const playlistsView = document.querySelector("#playlists-view");
+  const playlistView = document.querySelector("#playlist-view");
+  const queueView = document.querySelector("#queue-view");
+  const similarSection = document.querySelector("#similar-section");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const discographyView = document.querySelector("#artist-discography-view");
+
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  playlistsView?.removeAttribute("hidden");
+  releaseView?.setAttribute("hidden", "");
+  discographyView?.setAttribute("hidden", "");
+}
+
+async function loadHomePlaylists() {
+  const recentIds = getRecentPlaylistIds();
+
+  const homePlaylists = [];
+
+  /*
+   * Fetch recently opened playlists individually.
+   *
+   * We need at most five objects in memory.
+   */
+  for (const playlistId of recentIds.slice(0, 5)) {
+    try {
+      const playlist = await spotifyFetch(
+        `/playlists/${encodeURIComponent(playlistId)}`,
+      );
+
+      if (playlist) {
+        homePlaylists.push(playlist);
+      }
+    } catch (error) {
+      console.warn("Could not load recent playlist:", playlistId, error);
+    }
   }
 
-  if (playlistView) {
-    playlistView.setAttribute("hidden", "");
+  /*
+   * If the user hasn't opened five playlists yet,
+   * fill the remaining slots from Spotify.
+   */
+  if (homePlaylists.length < 5) {
+    const data = await getUserPlaylists(5);
+
+    const alreadyUsed = new Set(homePlaylists.map((playlist) => playlist.id));
+
+    for (const playlist of data.items ?? []) {
+      if (alreadyUsed.has(playlist.id)) {
+        continue;
+      }
+
+      homePlaylists.push(playlist);
+
+      if (homePlaylists.length === 5) {
+        break;
+      }
+    }
   }
 
-  if (queueView) {
-    queueView.setAttribute("hidden", "");
+  renderPlaylists(homePlaylists.slice(0, 5), "playlists");
+}
+
+async function loadNextPlaylistPage() {
+  if (allPlaylistsLoading || allPlaylistsFinished) {
+    return;
   }
 
-  if (homeView) {
-    homeView.removeAttribute("hidden");
+  allPlaylistsLoading = true;
+
+  const status = document.querySelector("#playlists-view-status");
+
+  try {
+    status.textContent = "Loading playlists...";
+
+    const data = await getUserPlaylists(PLAYLIST_PAGE_SIZE, allPlaylistsOffset);
+
+    const recentIds = new Set(getRecentPlaylistIds());
+
+    /*
+     * Recently opened playlists are inserted
+     * separately, so don't duplicate them here.
+     */
+    const playlists = (data.items ?? []).filter(
+      (playlist) => !recentIds.has(playlist.id),
+    );
+
+    renderPlaylists(playlists, "all-playlists", true);
+
+    allPlaylistsOffset += data.items?.length ?? 0;
+
+    if (!data.next || (data.items?.length ?? 0) === 0) {
+      allPlaylistsFinished = true;
+      status.textContent = "";
+    } else {
+      status.textContent = "";
+    }
+  } catch (error) {
+    console.error("Could not load playlists:", error);
+
+    status.textContent = "Could not load playlists.";
+  } finally {
+    allPlaylistsLoading = false;
   }
 }
 
 function showPlaylistView() {
   const homeView = document.querySelector("#home-view");
-
   const searchView = document.querySelector("#search-view");
-
+  const playlistsView = document.querySelector("#playlists-view");
   const playlistView = document.querySelector("#playlist-view");
-
+  const queueView = document.querySelector("#queue-view");
   const similarSection = document.querySelector("#similar-section");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const discographyView = document.querySelector("#artist-discography-view");
 
-  // Hide home
-  if (homeView) {
-    homeView.setAttribute("hidden", "");
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  releaseView?.setAttribute("hidden", "");
+  discographyView?.setAttribute("hidden", "");
+  playlistView?.removeAttribute("hidden");
+}
+
+async function loadRecentPlaylistsForLibrary() {
+  const container = document.querySelector("#all-playlists");
+
+  container.innerHTML = "";
+
+  const recentIds = getRecentPlaylistIds();
+
+  for (const playlistId of recentIds) {
+    try {
+      const playlist = await spotifyFetch(
+        `/playlists/${encodeURIComponent(playlistId)}`,
+      );
+
+      renderPlaylists([playlist], "all-playlists", true);
+    } catch (error) {
+      console.warn("Skipping unavailable recent playlist:", playlistId);
+    }
+  }
+}
+
+async function openPlaylistsPage() {
+  showPlaylistsView();
+
+  const container = document.querySelector("#all-playlists");
+
+  if (!container) {
+    return;
   }
 
-  // Hide search page
-  if (searchView) {
-    searchView.setAttribute("hidden", "");
-  }
+  container.innerHTML = "";
 
-  // Hide recommendations
-  if (similarSection) {
-    similarSection.setAttribute("hidden", "");
-  }
+  allPlaylistsOffset = 0;
+  allPlaylistsLoading = false;
+  allPlaylistsFinished = false;
 
-  // Show playlist page
-  if (playlistView) {
-    playlistView.removeAttribute("hidden");
-  }
+  await loadRecentPlaylistsForLibrary();
+  await loadNextPlaylistPage();
 }
 
 function showQueueView() {
   const homeView = document.querySelector("#home-view");
-
   const searchView = document.querySelector("#search-view");
-
+  const playlistsView = document.querySelector("#playlists-view");
   const playlistView = document.querySelector("#playlist-view");
-
   const queueView = document.querySelector("#queue-view");
-
   const similarSection = document.querySelector("#similar-section");
+  const releaseView = document.querySelector("#release-view");
+  const artistView = document.querySelector("#artist-view");
+  const discographyView = document.querySelector("#artist-discography-view");
 
-  if (homeView) {
-    homeView.setAttribute("hidden", "");
-  }
-
-  if (searchView) {
-    searchView.setAttribute("hidden", "");
-  }
-
-  if (playlistView) {
-    playlistView.setAttribute("hidden", "");
-  }
-
-  if (similarSection) {
-    similarSection.setAttribute("hidden", "");
-  }
-
-  if (queueView) {
-    queueView.removeAttribute("hidden");
-  }
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  queueView?.removeAttribute("hidden");
+  releaseView?.setAttribute("hidden", "");
+  discographyView?.setAttribute("hidden", "");
 }
 
 function clearSimilarResults() {
@@ -1017,16 +1420,196 @@ function clearSimilarResults() {
 
 function showSearchView() {
   const homeView = document.querySelector("#home-view");
-
   const searchView = document.querySelector("#search-view");
-
+  const playlistsView = document.querySelector("#playlists-view");
   const playlistView = document.querySelector("#playlist-view");
+  const queueView = document.querySelector("#queue-view");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const discographyView = document.querySelector("#artist-discography-view");
 
-  homeView.setAttribute("hidden", "");
+  homeView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  releaseView?.setAttribute("hidden", "");
+  searchView?.removeAttribute("hidden");
+  discographyView?.setAttribute("hidden", "");
+}
 
-  playlistView.setAttribute("hidden", "");
+function showArtistView() {
+  const homeView = document.querySelector("#home-view");
+  const searchView = document.querySelector("#search-view");
+  const playlistsView = document.querySelector("#playlists-view");
+  const playlistView = document.querySelector("#playlist-view");
+  const queueView = document.querySelector("#queue-view");
+  const artistView = document.querySelector("#artist-view");
+  const similarSection = document.querySelector("#similar-section");
+  const releaseView = document.querySelector("#release-view");
+  const discographyView = document.querySelector("#artist-discography-view");
 
-  searchView.removeAttribute("hidden");
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  releaseView?.setAttribute("hidden", "");
+  artistView?.removeAttribute("hidden");
+  discographyView?.setAttribute("hidden", "");
+}
+
+function showArtistDiscographyView() {
+  const homeView = document.querySelector("#home-view");
+  const searchView = document.querySelector("#search-view");
+  const playlistsView = document.querySelector("#playlists-view");
+  const playlistView = document.querySelector("#playlist-view");
+  const queueView = document.querySelector("#queue-view");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const discographyView = document.querySelector("#artist-discography-view");
+  const similarSection = document.querySelector("#similar-section");
+
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  releaseView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+
+  discographyView?.removeAttribute("hidden");
+}
+
+async function loadNextDiscographyPage() {
+  if (
+    !currentDiscographyArtist?.id ||
+    discographyLoading ||
+    discographyFinished
+  ) {
+    return;
+  }
+
+  const container = document.querySelector("#artist-discography-releases");
+
+  const status = document.querySelector("#artist-discography-status");
+
+  discographyLoading = true;
+
+  try {
+    status.textContent = "Loading releases...";
+
+    const data = await getArtistAlbums(
+      currentDiscographyArtist.id,
+      discographyOffset,
+      DISCOGRAPHY_PAGE_SIZE,
+    );
+
+    const releases = data.items ?? [];
+
+    renderArtistAlbums(
+      releases,
+      true,
+      "artist-discography-releases",
+      "discography",
+    );
+
+    discographyOffset += releases.length;
+
+    if (!data.next || releases.length === 0) {
+      discographyFinished = true;
+
+      status.textContent =
+        container.children.length === 0 ? "No releases found." : "";
+    } else {
+      status.textContent = "";
+    }
+  } catch (error) {
+    console.error("Could not load artist discography:", error);
+
+    status.textContent = "Could not load discography.";
+  } finally {
+    discographyLoading = false;
+  }
+}
+
+async function openArtistDiscography(artist) {
+  if (!artist?.id) {
+    return;
+  }
+
+  currentDiscographyArtist = artist;
+
+  discographyOffset = 0;
+  discographyLoading = false;
+  discographyFinished = false;
+
+  const title = document.querySelector("#artist-discography-title");
+
+  const status = document.querySelector("#artist-discography-status");
+
+  const container = document.querySelector("#artist-discography-releases");
+
+  title.textContent = `${artist.name ?? "Artist"} discography`;
+
+  status.textContent = "";
+
+  container.innerHTML = "";
+
+  showArtistDiscographyView();
+
+  await loadNextDiscographyPage();
+}
+
+function clearArtistDiscographyView() {
+  const container = document.querySelector("#artist-discography-releases");
+
+  const status = document.querySelector("#artist-discography-status");
+
+  const title = document.querySelector("#artist-discography-title");
+
+  if (container) {
+    container.innerHTML = "";
+  }
+
+  if (status) {
+    status.textContent = "";
+  }
+
+  if (title) {
+    title.textContent = "Discography";
+  }
+
+  currentDiscographyArtist = null;
+
+  discographyOffset = 0;
+  discographyLoading = false;
+  discographyFinished = false;
+}
+
+function showReleaseView() {
+  const homeView = document.querySelector("#home-view");
+  const searchView = document.querySelector("#search-view");
+  const playlistsView = document.querySelector("#playlists-view");
+  const playlistView = document.querySelector("#playlist-view");
+  const queueView = document.querySelector("#queue-view");
+  const artistView = document.querySelector("#artist-view");
+  const releaseView = document.querySelector("#release-view");
+  const similarSection = document.querySelector("#similar-section");
+  const discographyView = document.querySelector("#artist-discography-view");
+
+  homeView?.setAttribute("hidden", "");
+  searchView?.setAttribute("hidden", "");
+  playlistsView?.setAttribute("hidden", "");
+  playlistView?.setAttribute("hidden", "");
+  queueView?.setAttribute("hidden", "");
+  artistView?.setAttribute("hidden", "");
+  similarSection?.setAttribute("hidden", "");
+  discographyView?.setAttribute("hidden", "");
+
+  releaseView?.removeAttribute("hidden");
 }
 
 function hideSearchView() {
@@ -1035,15 +1618,28 @@ function hideSearchView() {
   searchView.setAttribute("hidden", "");
 }
 
-function renderPlaylists(playlists) {
-  const container = document.querySelector("#playlists");
+function renderPlaylists(playlists, containerId = "playlists", append = false) {
+  const container = document.querySelector(`#${containerId}`);
 
-  container.innerHTML = "";
+  if (!container) {
+    return;
+  }
+
+  if (!append) {
+    container.innerHTML = "";
+  }
+
+  const fragment = document.createDocumentFragment();
 
   playlists.forEach((playlist) => {
+    if (!playlist?.id) {
+      return;
+    }
+
     const playlistElement = document.createElement("div");
 
     playlistElement.className = "playlist-card";
+    playlistElement.dataset.playlistId = playlist.id;
 
     const image = getMediumSpotifyImage(playlist.images);
 
@@ -1051,38 +1647,52 @@ function renderPlaylists(playlists) {
       <img
         class="playlist-image"
         src="${image}"
-        alt="${playlist.name}"
+        alt=""
         loading="lazy"
         decoding="async"
       />
 
       <div class="playlist-info">
-        <span class="playlist-name">
-          ${playlist.name}
-        </span>
+        <span class="playlist-name"></span>
 
-        <span class="playlist-owner">
-          ${playlist.owner?.display_name ?? ""}
-        </span>
+        <span class="playlist-owner"></span>
       </div>
     `;
 
-    playlistElement.addEventListener("click", async () => {
-      try {
-        const data = await getPlaylistItems(playlist.id);
+    const nameElement = playlistElement.querySelector(".playlist-name");
 
-        console.log("Playlist items:", data);
+    const ownerElement = playlistElement.querySelector(".playlist-owner");
 
-        renderPlaylistTracks(playlist, data.items);
+    nameElement.textContent = playlist.name ?? "Playlist";
 
-        showPlaylistView();
-      } catch (error) {
-        console.error("Could not load playlist:", error);
-      }
-    });
+    ownerElement.textContent = playlist.owner?.display_name ?? "";
 
-    container.appendChild(playlistElement);
+    playlistElement._playlist = playlist;
+
+    fragment.appendChild(playlistElement);
   });
+
+  container.appendChild(fragment);
+}
+
+async function openPlaylist(playlist, returnView = "home") {
+  if (!playlist?.id) {
+    return;
+  }
+
+  playlistReturnView = returnView;
+
+  markPlaylistOpened(playlist.id);
+
+  try {
+    const data = await getPlaylistItems(playlist.id);
+
+    renderPlaylistTracks(playlist, data.items ?? []);
+
+    showPlaylistView();
+  } catch (error) {
+    console.error("Could not load playlist:", error);
+  }
 }
 
 function renderPlaylistTracks(playlist, items) {
@@ -1161,7 +1771,7 @@ function renderNextPlaylistBatch() {
 
     trackElement.addEventListener("click", async () => {
       try {
-        await playPlaylist(currentPlaylist.uri, index);
+        await playContext(currentPlaylist.uri, index, false);
       } catch (error) {
         console.error("Playlist playback error:", error);
       }
@@ -1173,6 +1783,539 @@ function renderNextPlaylistBatch() {
   container.appendChild(fragment);
 
   renderedPlaylistCount = endIndex;
+}
+
+function renderArtistSearchResults(artists) {
+  const section = document.querySelector("#artist-results-section");
+  const container = document.querySelector("#artist-search-results");
+
+  container.innerHTML = "";
+
+  if (!artists.length) {
+    section.setAttribute("hidden", "");
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const artist of artists) {
+    if (!artist?.id) {
+      continue;
+    }
+
+    const card = document.createElement("button");
+
+    card.className = "artist-search-card";
+    card.type = "button";
+
+    const image = getSmallestSpotifyImage(artist.images);
+
+    card.innerHTML = `
+      <img
+        class="artist-search-image"
+        src="${image}"
+        alt=""
+        loading="lazy"
+        decoding="async"
+      />
+
+      <span class="artist-search-name"></span>
+    `;
+
+    card.querySelector(".artist-search-name").textContent =
+      artist.name ?? "Artist";
+
+    card.addEventListener("click", () => {
+      void openArtist(artist);
+    });
+
+    fragment.appendChild(card);
+  }
+
+  container.appendChild(fragment);
+  section.removeAttribute("hidden");
+}
+
+function clearArtistSearchResults() {
+  const container = document.querySelector("#artist-search-results");
+  const section = document.querySelector("#artist-results-section");
+
+  if (container) {
+    container.innerHTML = "";
+  }
+
+  if (section) {
+    section.setAttribute("hidden", "");
+  }
+}
+
+function clearArtistView() {
+  artistRequestId++;
+  const topTracks = document.querySelector("#artist-top-tracks");
+  const albums = document.querySelector("#artist-albums");
+  const image = document.querySelector("#artist-image");
+  const name = document.querySelector("#artist-name");
+  const status = document.querySelector("#artist-status");
+  const loadMore = document.querySelector("#artist-load-more");
+
+  topTracks.innerHTML = "";
+  albums.innerHTML = "";
+
+  image.src = "";
+  image.alt = "";
+
+  name.textContent = "Artist";
+  status.textContent = "";
+
+  loadMore.setAttribute("hidden", "");
+  loadMore.onclick = null;
+
+  clearReleaseView();
+}
+
+async function openArtist(artist) {
+  if (!artist?.id) {
+    return;
+  }
+
+  clearArtistView();
+
+  const requestId = ++artistRequestId;
+
+  showArtistView();
+
+  const name = document.querySelector("#artist-name");
+  const image = document.querySelector("#artist-image");
+  const status = document.querySelector("#artist-status");
+
+  name.textContent = artist.name ?? "Artist";
+
+  const profileImage = getMediumSpotifyImage(artist.images);
+
+  if (profileImage) {
+    image.src = profileImage;
+    image.alt = `${artist.name} profile`;
+  }
+
+  status.textContent = "Loading artist...";
+
+  const [topTracksResult, albumsResult] = await Promise.allSettled([
+    getArtistTopTracks(artist),
+    getArtistAlbums(artist.id, 0, 5),
+  ]);
+
+  if (requestId !== artistRequestId) {
+    return;
+  }
+
+  if (topTracksResult.status === "fulfilled") {
+    renderArtistTopTracks(topTracksResult.value);
+  } else {
+    console.error("Could not load artist top tracks:", topTracksResult.reason);
+  }
+
+  if (albumsResult.status === "fulfilled") {
+    const albumData = albumsResult.value;
+
+    renderArtistAlbums(albumData.items ?? [], false);
+
+    setupArtistDiscographyButton(artist, Boolean(albumData.next));
+  } else {
+    console.error("Could not load artist albums:", albumsResult.reason);
+  }
+
+  if (
+    topTracksResult.status === "rejected" &&
+    albumsResult.status === "rejected"
+  ) {
+    status.textContent = "Could not load artist.";
+  } else if (topTracksResult.status === "rejected") {
+    status.textContent = "Could not load top tracks.";
+  } else if (albumsResult.status === "rejected") {
+    status.textContent = "Could not load albums.";
+  } else {
+    status.textContent = "";
+  }
+}
+
+function renderArtistTopTracks(tracks) {
+  const container = document.querySelector("#artist-top-tracks");
+
+  container.innerHTML = "";
+
+  const topFive = tracks.slice(0, 5);
+
+  if (topFive.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "section-status";
+    empty.textContent = "No top tracks found.";
+
+    container.appendChild(empty);
+
+    return;
+  }
+  const trackUris = topFive.map((track) => track.uri).filter(Boolean);
+
+  const fragment = document.createDocumentFragment();
+
+  topFive.forEach((track, index) => {
+    const row = document.createElement("div");
+
+    row.className = "track-card";
+
+    const image = getSmallestSpotifyImage(track.album?.images);
+
+    const artists =
+      track.artists?.map((artist) => artist.name).join(", ") ?? "";
+
+    row.innerHTML = `
+      <span class="track-number">${index + 1}</span>
+
+      <img
+        class="track-image"
+        src="${image}"
+        alt=""
+        loading="lazy"
+        decoding="async"
+      />
+
+      <div class="track-info">
+        <span class="track-name"></span>
+        <span class="track-artist"></span>
+      </div>
+
+      <button
+        class="search-play-button"
+        type="button"
+        aria-label="Play"
+      >
+        ▶
+      </button>
+    `;
+
+    row.querySelector(".track-name").textContent = track.name ?? "Track";
+
+    row.querySelector(".track-artist").textContent = artists;
+
+    row.addEventListener("click", () => {
+      void playTrack(trackUris, index);
+    });
+
+    row
+      .querySelector(".search-play-button")
+      .addEventListener("click", (event) => {
+        event.stopPropagation();
+
+        void playTrack(trackUris, index);
+      });
+
+    fragment.appendChild(row);
+  });
+
+  container.appendChild(fragment);
+}
+
+function getArtistReleaseType(release) {
+  if (release.album_type === "album") {
+    return "Album";
+  }
+
+  if (release.album_type === "single") {
+    /*
+     * Spotify doesn't expose "EP" as a separate album_type.
+     * EPs are returned in the "single" category.
+     *
+     * Use track count as a lightweight presentation heuristic:
+     * 1-3 tracks = Single
+     * 4+ tracks = EP
+     */
+    if ((release.total_tracks ?? 0) >= 4) {
+      return "EP";
+    }
+
+    return "Single";
+  }
+
+  return "Release";
+}
+
+function formatArtistReleaseDate(release) {
+  const releaseDate = release.release_date;
+
+  if (!releaseDate) {
+    return "";
+  }
+
+  const precision = release.release_date_precision;
+
+  if (precision === "day") {
+    const [year, month, day] = releaseDate.split("-");
+
+    return `${month}/${day}/${year}`;
+  }
+
+  if (precision === "month") {
+    const [year, month] = releaseDate.split("-");
+
+    return `${month}/${year}`;
+  }
+
+  return releaseDate;
+}
+
+function clearReleaseView() {
+  const title = document.querySelector("#release-title");
+  const type = document.querySelector("#release-type-label");
+  const status = document.querySelector("#release-status");
+  const tracks = document.querySelector("#release-tracks");
+  const shuffleButton = document.querySelector("#shuffle-release");
+
+  title.textContent = "Release";
+  type.textContent = "RELEASE";
+  status.textContent = "";
+  tracks.innerHTML = "";
+
+  if (shuffleButton) {
+    shuffleButton.onclick = null;
+  }
+}
+
+function renderReleaseTracks(release, tracks) {
+  const container = document.querySelector("#release-tracks");
+
+  container.innerHTML = "";
+
+  if (!tracks.length) {
+    const empty = document.createElement("p");
+
+    empty.className = "section-status";
+    empty.textContent = "No songs found.";
+
+    container.appendChild(empty);
+
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  tracks.forEach((track, index) => {
+    if (!track?.uri) {
+      return;
+    }
+
+    const row = document.createElement("div");
+
+    row.className = "track-card";
+
+    const artists =
+      track.artists?.map((artist) => artist.name).join(", ") ?? "";
+
+    row.innerHTML = `
+      <span class="track-number">
+        ${index + 1}
+      </span>
+
+      <img
+        class="track-image"
+        src="${getSmallestSpotifyImage(release.images)}"
+        alt=""
+        loading="lazy"
+        decoding="async"
+      />
+
+      <div class="track-info">
+        <span class="track-name"></span>
+        <span class="track-artist"></span>
+      </div>
+
+      <button
+        class="search-play-button"
+        type="button"
+        aria-label="Play"
+      >
+        ▶
+      </button>
+    `;
+
+    row.querySelector(".track-name").textContent = track.name ?? "Track";
+
+    row.querySelector(".track-artist").textContent = artists;
+
+    row.addEventListener("click", async () => {
+      try {
+        await playContext(release.uri, index, false);
+      } catch (error) {
+        console.error("Release playback error:", error);
+      }
+    });
+
+    row
+      .querySelector(".search-play-button")
+      .addEventListener("click", async (event) => {
+        event.stopPropagation();
+
+        try {
+          await playContext(release.uri, index, false);
+        } catch (error) {
+          console.error("Release playback error:", error);
+        }
+      });
+
+    fragment.appendChild(row);
+  });
+
+  container.appendChild(fragment);
+
+  const shuffleButton = document.querySelector("#shuffle-release");
+
+  if (shuffleButton) {
+    shuffleButton.onclick = async () => {
+      if (!release.uri || tracks.length === 0) {
+        return;
+      }
+
+      const startIndex = Math.floor(Math.random() * tracks.length);
+
+      try {
+        await playContext(release.uri, startIndex, true);
+      } catch (error) {
+        console.error("Release shuffle error:", error);
+      }
+    };
+  }
+}
+
+async function openRelease(release, returnView = "artist") {
+  if (!release?.id) {
+    return;
+  }
+
+  releaseReturnView = returnView;
+
+  // existing openRelease code continues...
+
+  clearReleaseView();
+
+  const title = document.querySelector("#release-title");
+  const type = document.querySelector("#release-type-label");
+  const status = document.querySelector("#release-status");
+
+  title.textContent = release.name ?? "Release";
+
+  type.textContent = getArtistReleaseType(release).toUpperCase();
+
+  status.textContent = "Loading songs...";
+
+  showReleaseView();
+
+  try {
+    const tracks = await getReleaseTracks(release.id);
+
+    renderReleaseTracks(release, tracks);
+
+    status.textContent = `${tracks.length} ${tracks.length === 1 ? "song" : "songs"}`;
+  } catch (error) {
+    console.error("Could not load release tracks:", error);
+
+    status.textContent = "Could not load songs.";
+  }
+}
+
+function renderArtistAlbums(
+  albums,
+  append = false,
+  containerId = "artist-albums",
+  releaseReturnView = "artist",
+) {
+  const container = document.querySelector(`#${containerId}`);
+
+  if (!container) {
+    return;
+  }
+
+  if (!append) {
+    container.innerHTML = "";
+  }
+
+  /*
+   * Copy before sorting so we don't mutate Spotify's
+   * response array.
+   *
+   * ISO Spotify dates sort correctly as strings:
+   * YYYY-MM-DD
+   * YYYY-MM
+   * YYYY
+   */
+  const sortedReleases = [...albums].sort((a, b) => {
+    return String(b.release_date ?? "").localeCompare(
+      String(a.release_date ?? ""),
+    );
+  });
+
+  const fragment = document.createDocumentFragment();
+
+  for (const release of sortedReleases) {
+    if (!release?.id) {
+      continue;
+    }
+
+    const card = document.createElement("div");
+
+    card.className = "playlist-card";
+
+    const image = getMediumSpotifyImage(release.images);
+
+    const releaseType = getArtistReleaseType(release);
+    const releaseDate = formatArtistReleaseDate(release);
+
+    card.innerHTML = `
+      <img
+        class="playlist-image"
+        src="${image}"
+        alt=""
+        loading="lazy"
+        decoding="async"
+      />
+
+      <div class="playlist-info">
+        <span class="playlist-name"></span>
+        <span class="playlist-owner"></span>
+      </div>
+    `;
+
+    card.querySelector(".playlist-name").textContent =
+      release.name ?? "Release";
+
+    card.querySelector(".playlist-owner").textContent =
+      `${releaseDate} · ${releaseType}`;
+
+    card.addEventListener("click", () => {
+      void openRelease(release, releaseReturnView);
+    });
+
+    fragment.appendChild(card);
+  }
+
+  container.appendChild(fragment);
+}
+
+function setupArtistDiscographyButton(artist, hasMoreReleases) {
+  const button = document.querySelector("#artist-load-more");
+
+  if (!artist?.id || !hasMoreReleases) {
+    button.setAttribute("hidden", "");
+    button.onclick = null;
+
+    return;
+  }
+
+  button.removeAttribute("hidden");
+  button.disabled = false;
+  button.textContent = "View Discography";
+
+  button.onclick = () => {
+    void openArtistDiscography(artist);
+  };
 }
 
 function renderSearchResults(tracks) {
@@ -1616,6 +2759,26 @@ async function getSpotifyQueue() {
   return spotifyFetch("/me/player/queue");
 }
 
+async function refreshQueueIfVisible() {
+  const queueView = document.querySelector("#queue-view");
+
+  if (!queueView || queueView.hasAttribute("hidden")) {
+    return;
+  }
+
+  try {
+    // Give Spotify a moment to update its queue
+    // after the SDK reports the new track.
+    await sleep(150);
+
+    const queue = await getSpotifyQueue();
+
+    renderQueue(queue);
+  } catch (error) {
+    console.error("Could not refresh queue:", error);
+  }
+}
+
 function getSavedVolume() {
   const savedVolume = Number(localStorage.getItem(VOLUME_KEY));
 
@@ -1833,11 +2996,48 @@ function initializeSpotifyPlayer() {
     if (!state) {
       return;
     }
+    console.log(
+      "Spotify playback state:",
+      "repeat_mode =",
+      state.repeat_mode,
+      "track =",
+      state.track_window.current_track?.name,
+    );
+
+    // Keep Betterfy's repeat button synchronized with
+    // Spotify's REAL playback state.
+    //
+    // Spotify SDK repeat_mode:
+    // 0 = off
+    // 1 = repeat context
+    // 2 = repeat track
+    if (!repeatChangeInProgress) {
+      if (state.repeat_mode === 2) {
+        repeatMode = "track";
+      } else if (state.repeat_mode === 1) {
+        repeatMode = "context";
+      } else {
+        repeatMode = "off";
+      }
+
+      updateRepeatButton();
+    }
 
     const previousTrack = state.track_window.previous_tracks?.at(-1);
 
     const currentTrack = state.track_window.current_track;
 
+    const currentTrackId = currentTrack?.id ?? currentTrack?.uri ?? null;
+
+    if (currentTrackId && currentTrackId !== lastQueueTrackId) {
+      const hadPreviousTrack = lastQueueTrackId !== null;
+
+      lastQueueTrackId = currentTrackId;
+
+      if (hadPreviousTrack) {
+        void refreshQueueIfVisible();
+      }
+    }
     // Update the top-right currently playing text
     if (currentTrack) {
       const status = document.querySelector("#status");
@@ -1865,7 +3065,7 @@ function initializeSpotifyPlayer() {
       state.position >= state.duration - 750 &&
       nextTracks.length === 0;
 
-    if (endedFinalTrack) {
+    if (endedFinalTrack && repeatMode === "off") {
       void startAutoplayFromTrack(currentTrack ?? previousTrack);
     } else if (!state.paused) {
       // Once playback has moved on, a future queue can
@@ -2299,9 +3499,7 @@ async function restoreSpotifySession() {
       logoutButton.removeAttribute("hidden");
     }
 
-    const playlists = await getUserPlaylists();
-
-    renderPlaylists(playlists.items ?? []);
+    await loadHomePlaylists();
 
     if (window.Spotify) {
       initializeSpotifyPlayer();
@@ -2334,11 +3532,15 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const nextButton = document.querySelector("#next-button");
 
+  const repeatButton = document.querySelector("#repeat-button");
+
   const queueButton = document.querySelector("#queue-button");
 
   const closeQueueButton = document.querySelector("#close-queue");
 
   const previousButton = document.querySelector("#previous-button");
+
+  const shuffleButton = document.querySelector("#shuffle-button");
 
   const volumeSlider = document.querySelector("#volume-slider");
 
@@ -2361,6 +3563,14 @@ window.addEventListener("DOMContentLoaded", () => {
   const searchStatus = document.querySelector("#search-status");
 
   const clearSearchButton = document.querySelector("#clear-search");
+
+  const closeArtistButton = document.querySelector("#close-artist");
+
+  const closeArtistDiscographyButton = document.querySelector(
+    "#close-artist-discography",
+  );
+
+  const closeReleaseButton = document.querySelector("#close-release");
 
   const closePlaylistButton = document.querySelector("#close-playlist");
 
@@ -2390,11 +3600,37 @@ window.addEventListener("DOMContentLoaded", () => {
     "#create-playlist-status",
   );
 
+  const homeNav = document.querySelector("#home-nav");
+
+  const playlistsNav = document.querySelector("#playlists-nav");
+
+  const homePlaylists = document.querySelector("#playlists");
+
+  const allPlaylists = document.querySelector("#all-playlists");
+
   const memoryModeButton = document.querySelector("#memory-mode-button");
 
   loginButton.addEventListener("click", loginWithSpotify);
 
   logoutButton.addEventListener("click", logoutSpotify);
+
+  shuffleButton.addEventListener("click", async () => {
+    try {
+      if (!spotifyPlayer) {
+        return;
+      }
+
+      const nextShuffleState = !shuffleEnabled;
+
+      await setSpotifyShuffle(nextShuffleState);
+
+      shuffleEnabled = nextShuffleState;
+
+      updateShuffleButton();
+    } catch (error) {
+      console.error("Shuffle error:", error);
+    }
+  });
 
   playPauseButton.addEventListener("click", async () => {
     try {
@@ -2425,6 +3661,32 @@ window.addEventListener("DOMContentLoaded", () => {
       await updatePlayer();
     } catch (error) {
       console.error("Next error:", error);
+    }
+  });
+
+  repeatButton.addEventListener("click", async () => {
+    if (!spotifyPlayer || repeatChangeInProgress) {
+      return;
+    }
+
+    repeatChangeInProgress = true;
+
+    try {
+      let nextRepeatMode;
+
+      if (repeatMode === "off") {
+        nextRepeatMode = "context";
+      } else if (repeatMode === "context") {
+        nextRepeatMode = "track";
+      } else {
+        nextRepeatMode = "off";
+      }
+
+      await setSpotifyRepeat(nextRepeatMode);
+    } catch (error) {
+      console.error("Repeat error:", error);
+    } finally {
+      repeatChangeInProgress = false;
     }
   });
 
@@ -2508,6 +3770,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const handleSearch = debounce(async () => {
     const query = searchInput.value.trim();
+    const requestId = ++searchRequestId;
 
     // Remove recommendations from the
     // previous search.
@@ -2516,6 +3779,9 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!query) {
       searchResults.innerHTML = "";
       searchStatus.textContent = "";
+
+      clearArtistSearchResults();
+      clearArtistView();
 
       showHomeView();
 
@@ -2528,16 +3794,21 @@ window.addEventListener("DOMContentLoaded", () => {
     try {
       searchStatus.textContent = "Searching...";
 
-      const results = await searchSpotify(query);
+      const results = await searchSpotify(query, "track,artist", 10);
+      if (requestId !== searchRequestId) {
+        return;
+      }
 
       const tracks = results.tracks?.items ?? [];
+      const artists = results.artists?.items ?? [];
 
+      renderArtistSearchResults(artists);
       renderSearchResults(tracks);
 
-      if (tracks.length === 0) {
-        searchStatus.textContent = "No songs found.";
+      if (tracks.length === 0 && artists.length === 0) {
+        searchStatus.textContent = "No results found.";
       } else {
-        searchStatus.textContent = `${tracks.length} results`;
+        searchStatus.textContent = `${artists.length} artists · ${tracks.length} songs`;
       }
     } catch (error) {
       console.error("Spotify search error:", error);
@@ -2549,18 +3820,24 @@ window.addEventListener("DOMContentLoaded", () => {
   searchInput.addEventListener("input", handleSearch);
 
   clearSearchButton.addEventListener("click", () => {
+    searchRequestId++;
+
     searchInput.value = "";
 
-    // Remove search DOM.
+    // Remove song search DOM.
     searchResults.innerHTML = "";
+
+    // Remove artist search DOM.
+    clearArtistSearchResults();
+
+    // Remove artist page DOM.
+    clearArtistView();
 
     searchStatus.textContent = "";
 
     // Remove recommendation DOM.
     clearSimilarResults();
 
-    // Return to playlists /
-    // recently played.
     showHomeView();
 
     searchInput.focus();
@@ -2577,7 +3854,11 @@ window.addEventListener("DOMContentLoaded", () => {
     currentPlaylist = null;
     renderedPlaylistCount = 0;
 
-    showHomeView();
+    if (playlistReturnView === "playlists") {
+      showPlaylistsView();
+    } else {
+      showHomeView();
+    }
   });
 
   showCreatePlaylistButton.addEventListener("click", () => {
@@ -2647,17 +3928,42 @@ window.addEventListener("DOMContentLoaded", () => {
   content.addEventListener("scroll", () => {
     const playlistView = document.querySelector("#playlist-view");
 
-    if (!playlistView || playlistView.hasAttribute("hidden")) {
-      return;
-    }
+    const playlistsView = document.querySelector("#playlists-view");
+
+    const discographyView = document.querySelector("#artist-discography-view");
 
     const distanceFromBottom =
       content.scrollHeight - content.scrollTop - content.clientHeight;
 
-    if (distanceFromBottom < 400) {
+    if (distanceFromBottom >= 400) {
+      return;
+    }
+
+    /*
+     * Load the next page of artist releases.
+     */
+    if (discographyView && !discographyView.hasAttribute("hidden")) {
+      void loadNextDiscographyPage();
+
+      return;
+    }
+
+    /*
+     * Load more tracks inside one playlist.
+     */
+    if (playlistView && !playlistView.hasAttribute("hidden")) {
       if (renderedPlaylistCount < currentPlaylistItems.length) {
         renderNextPlaylistBatch();
       }
+
+      return;
+    }
+
+    /*
+     * Load the next page of playlists.
+     */
+    if (playlistsView && !playlistsView.hasAttribute("hidden")) {
+      void loadNextPlaylistPage();
     }
   });
   if (queueButton) {
@@ -2692,5 +3998,56 @@ window.addEventListener("DOMContentLoaded", () => {
       showHomeView();
     });
   }
+  homeNav.addEventListener("click", (event) => {
+    event.preventDefault();
+
+    showHomeView();
+  });
+
+  playlistsNav.addEventListener("click", async (event) => {
+    event.preventDefault();
+
+    await openPlaylistsPage();
+  });
+  homePlaylists.addEventListener("click", async (event) => {
+    const card = event.target.closest(".playlist-card");
+
+    if (!card || !homePlaylists.contains(card)) {
+      return;
+    }
+
+    await openPlaylist(card._playlist, "home");
+  });
+
+  allPlaylists.addEventListener("click", async (event) => {
+    const card = event.target.closest(".playlist-card");
+
+    if (!card || !allPlaylists.contains(card)) {
+      return;
+    }
+
+    await openPlaylist(card._playlist, "playlists");
+  });
+
+  closeArtistButton.addEventListener("click", () => {
+    clearArtistView();
+    showSearchView();
+  });
+
+  closeArtistDiscographyButton.addEventListener("click", () => {
+    clearArtistDiscographyView();
+    showArtistView();
+  });
+
+  closeReleaseButton.addEventListener("click", () => {
+    clearReleaseView();
+
+    if (releaseReturnView === "discography" && currentDiscographyArtist) {
+      showArtistDiscographyView();
+    } else {
+      showArtistView();
+    }
+  });
+
   void restoreSpotifySession();
 });

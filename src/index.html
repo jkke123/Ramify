@@ -18,7 +18,7 @@
         </div>
 
         <nav class="side-nav">
-          <a class="nav-item active" href="#home-view">
+          <a id="home-nav" class="nav-item active" href="#home-view">
             <span class="nav-icon" aria-hidden="true">⌂</span>
             <span>Home</span>
           </a>
@@ -28,9 +28,9 @@
             <span>Search</span>
           </a>
 
-          <a class="nav-item" href="#playlists-section">
+          <a id="playlists-nav" class="nav-item" href="#playlists-view">
             <span class="nav-icon" aria-hidden="true">▤</span>
-            <span>Library</span>
+            <span>Playlists</span>
           </a>
         </nav>
 
@@ -137,7 +137,127 @@
 
             <p id="search-status" class="section-status"></p>
 
+            <div id="artist-results-section" hidden>
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">ARTISTS</span>
+                  <h3>Artists</h3>
+                </div>
+              </div>
+
+              <div id="artist-search-results" class="artist-search-grid"></div>
+            </div>
+
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">SONGS</span>
+                <h3>Songs</h3>
+              </div>
+            </div>
+
             <div id="search-results" class="track-list"></div>
+          </section>
+
+          <section id="artist-view" class="music-section" hidden>
+            <div class="playlist-view-header">
+              <button id="close-artist" class="secondary-button" type="button">
+                ← Back
+              </button>
+
+              <div class="artist-header">
+                <img
+                  id="artist-image"
+                  class="artist-profile-image"
+                  src=""
+                  alt=""
+                  decoding="async"
+                />
+
+                <div>
+                  <span class="eyebrow">ARTIST</span>
+                  <h2 id="artist-name">Artist</h2>
+                </div>
+              </div>
+            </div>
+
+            <section class="artist-section">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">POPULAR</span>
+                  <h3>Top tracks</h3>
+                </div>
+              </div>
+
+              <p id="artist-status" class="section-status"></p>
+
+              <div id="artist-top-tracks" class="track-list"></div>
+            </section>
+
+            <section class="artist-section">
+              <div class="section-heading">
+                <div>
+                  <span class="eyebrow">DISCOGRAPHY</span>
+                  <h3>Releases</h3>
+                </div>
+              </div>
+
+              <div id="artist-albums" class="playlist-grid"></div>
+
+              <button
+                id="artist-load-more"
+                class="secondary-button"
+                type="button"
+                hidden
+              >
+                View Discography
+              </button>
+            </section>
+          </section>
+
+          <section id="artist-discography-view" class="music-section" hidden>
+            <div class="playlist-view-header">
+              <button
+                id="close-artist-discography"
+                class="secondary-button"
+                type="button"
+              >
+                ← Back
+              </button>
+
+              <div>
+                <span class="eyebrow">DISCOGRAPHY</span>
+                <h2 id="artist-discography-title">Discography</h2>
+              </div>
+            </div>
+
+            <p id="artist-discography-status" class="section-status"></p>
+
+            <div id="artist-discography-releases" class="playlist-grid"></div>
+          </section>
+
+          <section id="release-view" class="music-section" hidden>
+            <div class="playlist-view-header">
+              <button id="close-release" class="secondary-button" type="button">
+                ← Back
+              </button>
+
+              <div>
+                <span id="release-type-label" class="eyebrow">RELEASE</span>
+                <h2 id="release-title">Release</h2>
+
+                <button
+                  id="shuffle-release"
+                  class="secondary-button shuffle-button"
+                  type="button"
+                >
+                  ⇄ Shuffle
+                </button>
+              </div>
+            </div>
+
+            <p id="release-status" class="section-status"></p>
+
+            <div id="release-tracks" class="track-list"></div>
           </section>
 
           <section id="similar-section" class="music-section" hidden>
@@ -158,7 +278,7 @@
               <div class="section-heading">
                 <div>
                   <span class="eyebrow">YOUR MUSIC</span>
-                  <h2>Playlists</h2>
+                  <h2>Recent playlists</h2>
                 </div>
 
                 <button
@@ -224,6 +344,19 @@
             </section>
           </div>
 
+          <section id="playlists-view" class="music-section" hidden>
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">YOUR LIBRARY</span>
+                <h2>Playlists</h2>
+              </div>
+            </div>
+
+            <p id="playlists-view-status" class="section-status"></p>
+
+            <div id="all-playlists" class="playlist-grid"></div>
+          </section>
+
           <section id="playlist-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button
@@ -270,11 +403,32 @@
 
       <div class="player-center">
         <div class="player-controls">
+          <button
+            id="shuffle-button"
+            class="player-icon-button"
+            type="button"
+            title="Shuffle"
+            aria-label="Shuffle"
+          >
+            ⇄
+          </button>
+
           <button id="previous-button" title="Previous">⏮</button>
 
           <button id="play-pause-button" title="Play / Pause">▶</button>
 
           <button id="next-button" title="Next">⏭</button>
+
+          <button
+            id="repeat-button"
+            class="player-icon-button"
+            type="button"
+            title="Repeat off"
+            aria-label="Repeat off"
+            aria-pressed="false"
+          >
+            ↻
+          </button>
         </div>
 
         <div class="progress-container">
