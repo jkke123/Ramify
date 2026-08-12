@@ -2,7 +2,10 @@
 
 use tiny_http::{Response, Server};
 
-use std::sync::Mutex;
+use std::sync::{
+    Arc,
+    Mutex,
+};
 
 use serde::Serialize;
 use sysinfo::{
@@ -92,12 +95,16 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
 
     .manage(ResourceMonitor {
-        system: Mutex::new(System::new()),
-    })
+    system: Mutex::new(System::new()),
+
+    #[cfg(target_os = "windows")]
+    webview_browser_pid: Arc::new(Mutex::new(None)),
+})
 
     .invoke_handler(tauri::generate_handler![
         wait_for_spotify_callback,
         get_resource_usage,
+        register_webview_process,
         set_webview_memory_mode,
         rename_audio_session
     ])
@@ -153,6 +160,99 @@ fn is_descendant_of(
     }
 
     false
+}
+
+#[tauri::command]
+fn register_webview_process(
+    window: tauri::WebviewWindow,
+    monitor: tauri::State<ResourceMonitor>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        /*
+         * Clone the Arc, not the Mutex itself.
+         *
+         * This gives the WebView callback its own
+         * reference-counted handle to the PID storage.
+         */
+        let stored_pid =
+            Arc::clone(&monitor.webview_browser_pid);
+
+        window
+            .with_webview(move |webview| {
+                unsafe {
+                    let controller =
+                        webview.controller();
+
+                    let core_webview =
+                        match controller.CoreWebView2() {
+                            Ok(webview) => webview,
+
+                            Err(error) => {
+                                eprintln!(
+                                    "Could not get CoreWebView2 for process tracking: {error}"
+                                );
+
+                                return;
+                            }
+                        };
+
+                    /*
+                     * Depending on the webview2-com version,
+                     * BrowserProcessId() returns the PID directly.
+                     */
+                    let mut browser_pid: u32 = 0;
+
+                        match core_webview.BrowserProcessId(
+                            &mut browser_pid as *mut u32,
+                        ) {
+                            Ok(()) => {
+                                if browser_pid == 0 {
+                                    eprintln!(
+                                        "WebView2 returned browser PID 0"
+                                    );
+
+                                    return;
+                                }
+
+                                match stored_pid.lock() {
+                                    Ok(mut pid) => {
+                                        *pid = Some(browser_pid);
+
+                                        println!(
+                                            "Registered WebView2 browser PID: {}",
+                                            browser_pid
+                                        );
+                                    }
+
+                                    Err(_) => {
+                                        eprintln!(
+                                            "Could not lock WebView2 PID storage"
+                                        );
+                                    }
+                                }
+                            }
+
+                            Err(error) => {
+                                eprintln!(
+                                    "Could not get WebView2 browser PID: {error}"
+                                );
+                            }
+}
+                }
+            })
+            .map_err(|error| error.to_string())?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        let _ = monitor;
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -252,10 +352,8 @@ fn get_resource_usage(
         .map_err(|_| "Could not lock resource monitor")?;
 
     /*
-     * IMPORTANT:
-     *
-     * We now refresh ALL processes because we need to
-     * discover Betterfy's child processes.
+     * Refresh every process because WebView2 uses
+     * multiple browser/renderer/utility processes.
      */
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -269,50 +367,81 @@ fn get_resource_usage(
         .process(betterfy_pid)
         .ok_or("Could not find Betterfy process")?;
 
-    /*
-     * Main Tauri/Rust process
-     */
     let core_memory =
         betterfy_process.memory();
-
-    let mut total_memory =
-        core_memory;
 
     let mut child_memory: u64 = 0;
 
     let mut total_cpu =
         betterfy_process.cpu_usage();
 
-    let mut process_count = 1;
+    let mut process_count: usize = 1;
 
     /*
-     * Check every running process.
-     *
-     * If it is a descendant of Betterfy,
-     * include its RAM and CPU.
+     * Get the WebView2 browser process PID that was
+     * captured directly from CoreWebView2.
      */
+    #[cfg(target_os = "windows")]
+    let webview_browser_pid = {
+        let stored = monitor
+            .webview_browser_pid
+            .lock()
+            .map_err(|_| "Could not lock WebView2 PID")?;
+
+        stored.map(Pid::from_u32)
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let webview_browser_pid: Option<Pid> = None;
+
     for (pid, process) in system.processes() {
         if *pid == betterfy_pid {
             continue;
         }
 
-        if is_descendant_of(
-            &system,
-            *pid,
-            betterfy_pid,
-        ) {
-            let memory =
-                process.memory();
+        /*
+         * Normal native descendants of Betterfy.
+         */
+        let is_betterfy_child =
+            is_descendant_of(
+                &system,
+                *pid,
+                betterfy_pid,
+            );
+
+        /*
+         * WebView2 consists of a browser process plus
+         * renderer/GPU/network/audio/utility children.
+         *
+         * Count:
+         *  - the browser process itself
+         *  - any descendants of that browser process
+         */
+        let is_webview_process =
+            if let Some(browser_pid) = webview_browser_pid {
+                *pid == browser_pid
+                    || is_descendant_of(
+                        &system,
+                        *pid,
+                        browser_pid,
+                    )
+            } else {
+                false
+            };
+
+        if is_betterfy_child || is_webview_process {
+            let memory = process.memory();
 
             child_memory += memory;
-            total_memory += memory;
 
-            total_cpu +=
-                process.cpu_usage();
+            total_cpu += process.cpu_usage();
 
             process_count += 1;
         }
     }
+
+    let total_memory =
+        core_memory + child_memory;
 
     Ok(ResourceUsage {
         memory_mb:
@@ -475,6 +604,9 @@ fn rename_audio_session() -> Result<(), String> {
 
 struct ResourceMonitor {
     system: Mutex<System>,
+
+    #[cfg(target_os = "windows")]
+    webview_browser_pid: Arc<Mutex<Option<u32>>>,
 }
 
 
