@@ -10,7 +10,11 @@
   </head>
 
   <body>
+    <!-- =========================
+         APP SHELL
+    ========================== -->
     <div class="app-shell">
+      <!-- SIDEBAR -->
       <aside class="sidebar" aria-label="Main navigation">
         <div class="brand-row">
           <div class="brand-mark" aria-hidden="true">B</div>
@@ -83,7 +87,9 @@
         </div>
       </aside>
 
+      <!-- MAIN WORKSPACE -->
       <div class="workspace">
+        <!-- TOP BAR -->
         <header class="topbar">
           <div class="search-box" role="search">
             <span class="search-icon" aria-hidden="true">⌕</span>
@@ -115,6 +121,7 @@
             <button id="spotify-login" class="primary-button" type="button">
               Connect
             </button>
+
             <button
               id="spotify-logout"
               class="secondary-button"
@@ -126,7 +133,11 @@
           </div>
         </header>
 
+        <!-- =========================
+             CONTENT VIEWS
+        ========================== -->
         <main class="content">
+          <!-- SEARCH VIEW -->
           <section id="search-view" class="music-section" hidden>
             <div class="section-heading">
               <div>
@@ -158,6 +169,7 @@
             <div id="search-results" class="track-list"></div>
           </section>
 
+          <!-- ARTIST VIEW -->
           <section id="artist-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button id="close-artist" class="secondary-button" type="button">
@@ -214,6 +226,7 @@
             </section>
           </section>
 
+          <!-- ARTIST DISCOGRAPHY VIEW -->
           <section id="artist-discography-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button
@@ -235,6 +248,7 @@
             <div id="artist-discography-releases" class="playlist-grid"></div>
           </section>
 
+          <!-- RELEASE VIEW -->
           <section id="release-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button id="close-release" class="secondary-button" type="button">
@@ -260,6 +274,7 @@
             <div id="release-tracks" class="track-list"></div>
           </section>
 
+          <!-- SIMILAR SONGS VIEW -->
           <section id="similar-section" class="music-section" hidden>
             <div class="section-heading">
               <div>
@@ -273,6 +288,7 @@
             <div id="similar-tracks" class="track-list"></div>
           </section>
 
+          <!-- HOME VIEW -->
           <div id="home-view">
             <section id="playlists-section" class="music-section">
               <div class="section-heading">
@@ -344,6 +360,7 @@
             </section>
           </div>
 
+          <!-- PLAYLIST LIBRARY VIEW -->
           <section id="playlists-view" class="music-section" hidden>
             <div class="section-heading">
               <div>
@@ -357,6 +374,7 @@
             <div id="all-playlists" class="playlist-grid"></div>
           </section>
 
+          <!-- SINGLE PLAYLIST VIEW -->
           <section id="playlist-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button
@@ -375,6 +393,8 @@
 
             <div id="playlist-tracks" class="track-list"></div>
           </section>
+
+          <!-- QUEUE VIEW -->
           <section id="queue-view" class="music-section" hidden>
             <div class="playlist-view-header">
               <button id="close-queue" type="button">← Back</button>
@@ -390,6 +410,9 @@
       </div>
     </div>
 
+    <!-- =========================
+         PLAYER BAR
+    ========================== -->
     <footer id="player-bar" class="player-bar" hidden>
       <div class="now-playing">
         <img id="player-art" class="player-art" src="" alt="Album art" />

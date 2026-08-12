@@ -917,22 +917,6 @@ textarea:focus-visible {
 
   min-width: 0;
 }
-.progress-container {
-  width: clamp(260px, 38vw, 560px);
-
-  display: grid;
-
-  grid-template-columns:
-    36px
-    minmax(100px, 1fr)
-    36px;
-
-  align-items: center;
-
-  gap: 7px;
-
-  margin-top: 5px;
-}
 
 .player-icon-button {
   width: clamp(26px, 3vw, 30px);
@@ -1261,6 +1245,7 @@ input[type="range"] {
 /* =========================
    QUEUE
 ========================= */
+
 .queue-add-button {
   margin-left: auto;
 
