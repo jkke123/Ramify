@@ -5,20 +5,22 @@ const { invoke } = window.__TAURI__.core;
 // Betterfy autoplay
 let autoplayEnabled = true;
 
-// NEW: queue-based autoplay protection.
-let autoplayFillInProgress = false;
-let lastAutoplayFillTrackId = null;
-let lastAutoplayFillTime = 0;
+// Betterfy autoplay is kept LOCAL.
+//
+// IMPORTANT:
+// Autoplay recommendations must NOT be inserted into Spotify's
+// explicit playback queue. Spotify gives explicit queued songs
+// priority over playlist/album context tracks.
+//
+// Only the user's "+ Queue" button should call addTrackToQueue().
+let autoplayPrepareInProgress = false;
 
-// When Spotify has this many or fewer upcoming tracks,
-// Betterfy will add more recommendations.
-const AUTOPLAY_QUEUE_THRESHOLD = 2;
+let preparedAutoplayUris = [];
+let preparedAutoplaySeedId = null;
 
-// Only keep a small number of recommendations queued.
-// This avoids repeatedly building large playback contexts.
-const AUTOPLAY_QUEUE_ADD_COUNT = 3;
+let autoplayStartInProgress = false;
 
-const AUTOPLAY_FILL_COOLDOWN_MS = 60_000;
+const AUTOPLAY_TRACK_COUNT = 3;
 
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
 const LASTFM_API_KEY = import.meta.env.VITE_LASTFM_API_KEY;
@@ -1058,32 +1060,40 @@ function initializeSpotifyPlayer() {
 
     const nextTracks = state.track_window.next_tracks ?? [];
 
-    // Keep Spotify's existing playback session alive.
-    //
-    // Instead of waiting for Spotify to completely run out
-    // of songs and starting a brand-new URI context, add
-    // recommendations while playback is still running.
+    /*
+     * AUTOPLAY PRIORITY RULE:
+     *
+     * Playlist / album context
+     *        ↓
+     * User "+ Queue" tracks
+     *        ↓
+     * Betterfy autoplay
+     *
+     * Betterfy autoplay never enters Spotify's explicit queue.
+     */
+
+    // We're on the final known song.
+    // Prepare recommendations in memory while it plays.
     if (
       !state.paused &&
       repeatMode === "off" &&
       currentTrack &&
-      nextTracks.length <= AUTOPLAY_QUEUE_THRESHOLD
+      nextTracks.length === 0
     ) {
-      void topUpAutoplayQueue(currentTrack);
+      void prepareAutoplay(currentTrack);
     }
 
-    // Once Spotify advances to another song, allow the
-    // new song to become an autoplay seed later.
-    if (!state.paused) {
-      const activeId = currentTrack?.id ?? currentTrack?.uri ?? null;
-
-      if (
-        activeId &&
-        activeId !== lastAutoplayFillTrackId &&
-        nextTracks.length > AUTOPLAY_QUEUE_THRESHOLD
-      ) {
-        lastAutoplayFillTrackId = null;
-      }
+    /*
+     * If the context has now completely ended,
+     * start our locally prepared recommendations.
+     */
+    if (
+      state.paused &&
+      repeatMode === "off" &&
+      currentTrack &&
+      nextTracks.length === 0
+    ) {
+      void startPreparedAutoplayIfFinished();
     }
 
     // -------------------------
@@ -1238,6 +1248,7 @@ function initializeSpotifyPlayer() {
 ========================= */
 
 async function playTrack(trackUris, startIndex = 0) {
+  clearPreparedAutoplay();
   const accessToken = await getValidSpotifyAccessToken();
 
   if (!accessToken) {
@@ -1274,6 +1285,8 @@ async function playTrack(trackUris, startIndex = 0) {
 }
 
 async function playContext(contextUri, position = 0, shuffle = false) {
+  clearPreparedAutoplay();
+
   const accessToken = await getValidSpotifyAccessToken();
 
   if (!accessToken) {
@@ -1665,14 +1678,14 @@ function spotifySdkTrackToApiTrack(track) {
   };
 }
 
-async function topUpAutoplayQueue(currentTrack) {
-  const now = Date.now();
+function clearPreparedAutoplay() {
+  preparedAutoplayUris = [];
+  preparedAutoplaySeedId = null;
+  autoplayPrepareInProgress = false;
+}
 
-  if (now - lastAutoplayFillTime < AUTOPLAY_FILL_COOLDOWN_MS) {
-    return;
-  }
-
-  if (!autoplayEnabled || autoplayFillInProgress || !currentTrack?.name) {
+async function prepareAutoplay(currentTrack) {
+  if (!autoplayEnabled || autoplayPrepareInProgress || !currentTrack?.name) {
     return;
   }
 
@@ -1681,18 +1694,18 @@ async function topUpAutoplayQueue(currentTrack) {
     currentTrack.uri ??
     `${currentTrack.name}:${currentTrack.artists?.[0]?.name ?? ""}`;
 
-  // Avoid repeatedly filling the queue from the same song.
-  if (lastAutoplayFillTrackId === trackId) {
+  // Already prepared recommendations for this ending track.
+  if (preparedAutoplaySeedId === trackId && preparedAutoplayUris.length > 0) {
     return;
   }
 
-  autoplayFillInProgress = true;
-  lastAutoplayFillTrackId = trackId;
-
-  lastAutoplayFillTime = now;
+  autoplayPrepareInProgress = true;
 
   try {
-    console.log("Autoplay: topping up queue from", currentTrack.name);
+    console.log(
+      "Autoplay: preparing recommendations locally from",
+      currentTrack.name,
+    );
 
     const seedTrack = spotifySdkTrackToApiTrack(currentTrack);
 
@@ -1701,24 +1714,122 @@ async function topUpAutoplayQueue(currentTrack) {
     const uris = recommendations
       .map((track) => track.uri)
       .filter(Boolean)
-      .slice(0, AUTOPLAY_QUEUE_ADD_COUNT);
+      .slice(0, AUTOPLAY_TRACK_COUNT);
 
     if (uris.length === 0) {
+      preparedAutoplayUris = [];
+      preparedAutoplaySeedId = null;
+
       return;
     }
 
-    for (const uri of uris) {
-      await addTrackToQueue(uri);
+    /*
+     * CRITICAL:
+     *
+     * Do NOT call addTrackToQueue() here.
+     *
+     * These stay entirely inside Betterfy until Spotify's
+     * current playlist/album/explicit queue has finished.
+     */
+    preparedAutoplayUris = uris;
+    preparedAutoplaySeedId = trackId;
+
+    console.log(`Autoplay: prepared ${uris.length} local recommendations`);
+  } catch (error) {
+    preparedAutoplayUris = [];
+    preparedAutoplaySeedId = null;
+
+    console.error("Autoplay preparation failed:", error);
+  } finally {
+    autoplayPrepareInProgress = false;
+  }
+}
+
+async function startPreparedAutoplayIfFinished() {
+  if (
+    !autoplayEnabled ||
+    autoplayStartInProgress ||
+    preparedAutoplayUris.length === 0 ||
+    !spotifyPlayer
+  ) {
+    return;
+  }
+
+  autoplayStartInProgress = true;
+
+  try {
+    const state = await spotifyPlayer.getCurrentState();
+
+    if (!state) {
+      return;
     }
 
-    console.log(`Autoplay: added ${uris.length} tracks to queue`);
-  } catch (error) {
-    // Allow this song to retry if filling the queue failed.
-    lastAutoplayFillTrackId = null;
+    const currentTrack = state.track_window.current_track;
 
-    console.error("Autoplay queue fill failed:", error);
+    if (!currentTrack) {
+      return;
+    }
+
+    const currentTrackId =
+      currentTrack.id ??
+      currentTrack.uri ??
+      `${currentTrack.name}:${currentTrack.artists?.[0]?.name ?? ""}`;
+
+    /*
+     * These recommendations belong specifically to the
+     * track that was at the end of the previous context.
+     */
+    if (currentTrackId !== preparedAutoplaySeedId) {
+      return;
+    }
+
+    const nextTracks = state.track_window.next_tracks ?? [];
+
+    /*
+     * Something else still needs to play.
+     *
+     * This includes:
+     * - playlist tracks
+     * - album tracks
+     * - songs explicitly added using "+ Queue"
+     *
+     * All of those have priority over autoplay.
+     */
+    if (nextTracks.length > 0) {
+      return;
+    }
+
+    /*
+     * Don't interrupt the ending song.
+     *
+     * Spotify should be paused once the playback context
+     * has actually exhausted itself.
+     */
+    const atEnd =
+      state.paused &&
+      state.duration > 0 &&
+      state.position >= state.duration - 1000;
+
+    if (!atEnd) {
+      return;
+    }
+
+    const uris = [...preparedAutoplayUris];
+
+    preparedAutoplayUris = [];
+    preparedAutoplaySeedId = null;
+
+    console.log("Autoplay: context finished; starting recommendations");
+
+    /*
+     * Start a NEW playback context instead of inserting the
+     * recommendations into Spotify's explicit queue.
+     */
+    await playTrack(uris, 0);
+  } catch (error) {
+    console.error("Could not start prepared autoplay:", error);
   } finally {
-    autoplayFillInProgress = false;
+    autoplayStartInProgress = false;
   }
 }
 
