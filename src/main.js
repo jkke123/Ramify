@@ -57,6 +57,9 @@ const TOKEN_KEYS = {
 };
 
 const VOLUME_KEY = "betterfy_volume";
+const THEME_KEY = "betterfy_theme";
+
+const CUSTOM_THEME_KEY = "betterfy_custom_theme";
 
 let spotifyPlayer = null;
 let spotifyDeviceId = null;
@@ -287,6 +290,119 @@ async function setBetterfyMemoryMode(low) {
 
     return false;
   }
+}
+
+const PRESET_THEMES = [
+  "dark",
+  "light",
+  "midnight",
+  "purple",
+  "ocean",
+  "custom",
+];
+
+const DEFAULT_CUSTOM_THEME = {
+  "--accent": "#1ed760",
+
+  "--sidebar-bg": "#0f0f0f",
+  "--workspace-bg": "#0f0f0f",
+  "--topbar-bg": "#0f0f0f",
+  "--player-bg": "#080808",
+
+  "--panel-2": "#171717",
+
+  "--text": "#f4f4f4",
+};
+
+function getCustomTheme() {
+  try {
+    const storedTheme = localStorage.getItem(CUSTOM_THEME_KEY);
+
+    if (!storedTheme) {
+      return { ...DEFAULT_CUSTOM_THEME };
+    }
+
+    return {
+      ...DEFAULT_CUSTOM_THEME,
+      ...JSON.parse(storedTheme),
+    };
+  } catch (error) {
+    console.error("Could not load custom theme:", error);
+
+    return { ...DEFAULT_CUSTOM_THEME };
+  }
+}
+
+function clearCustomThemeOverrides() {
+  Object.keys(DEFAULT_CUSTOM_THEME).forEach((variable) => {
+    document.documentElement.style.removeProperty(variable);
+  });
+}
+
+function applyCustomTheme() {
+  const customTheme = getCustomTheme();
+
+  Object.entries(customTheme).forEach(([variable, value]) => {
+    document.documentElement.style.setProperty(variable, value);
+  });
+}
+
+function applyTheme(theme) {
+  const selectedTheme = PRESET_THEMES.includes(theme) ? theme : "dark";
+
+  clearCustomThemeOverrides();
+
+  document.documentElement.dataset.theme = selectedTheme;
+
+  localStorage.setItem(THEME_KEY, selectedTheme);
+
+  if (selectedTheme === "custom") {
+    applyCustomTheme();
+  }
+
+  updateThemeButtons();
+  updateCustomThemeEditor();
+}
+
+function getSavedTheme() {
+  return localStorage.getItem(THEME_KEY) ?? "dark";
+}
+
+function updateThemeButtons() {
+  const currentTheme = document.documentElement.dataset.theme ?? "dark";
+
+  document.querySelectorAll("[data-theme]").forEach((button) => {
+    button.classList.toggle(
+      "theme-active",
+      button.dataset.theme === currentTheme,
+    );
+  });
+}
+
+function updateCustomThemeEditor() {
+  const editor = document.querySelector("#custom-theme-editor");
+
+  if (!editor) {
+    return;
+  }
+
+  const currentTheme = document.documentElement.dataset.theme ?? "dark";
+
+  if (currentTheme === "custom") {
+    editor.removeAttribute("hidden");
+  } else {
+    editor.setAttribute("hidden", "");
+  }
+
+  const customTheme = getCustomTheme();
+
+  document.querySelectorAll("[data-theme-variable]").forEach((input) => {
+    const variable = input.dataset.themeVariable;
+
+    if (customTheme[variable]) {
+      input.value = customTheme[variable];
+    }
+  });
 }
 
 /* =========================
@@ -551,14 +667,14 @@ async function loginWithSpotify() {
 
     const loginButton = document.querySelector("#spotify-login");
 
-    const logoutButton = document.querySelector("#spotify-logout");
+    const settingsButton = document.querySelector("#settings-button");
 
     if (loginButton) {
       loginButton.setAttribute("hidden", "");
     }
 
-    if (logoutButton) {
-      logoutButton.removeAttribute("hidden");
+    if (settingsButton) {
+      settingsButton.removeAttribute("hidden");
     }
 
     const playlists = await getUserPlaylists();
@@ -577,7 +693,7 @@ async function loginWithSpotify() {
 
     await updatePlayer();
   } catch (error) {
-    console.error("Betterfy startup error:", error);
+    console.error("Ramify startup error:", error);
 
     document.querySelector("#status").textContent = `Error: ${error.message}`;
   }
@@ -603,10 +719,12 @@ function cleanupPlaybackResources() {
   spotifyDeviceReady = false;
   spotifyDeviceSetupPromise = null;
 
-  autoplayFillInProgress = false;
-  lastAutoplayFillTrackId = null;
+  autoplayPrepareInProgress = false;
+  autoplayStartInProgress = false;
+  preparedAutoplayUris = [];
+  preparedAutoplaySeedId = null;
+
   lastQueueTrackId = null;
-  lastAutoplayFillTime = 0;
 
   isCurrentlyPlaying = false;
   isSeeking = false;
@@ -678,7 +796,7 @@ async function logoutSpotify() {
 
     clearSimilarResults();
 
-    console.log("Spotify logout complete. Reloading Betterfy...");
+    console.log("Spotify logout complete. Reloading Ramify...");
 
     /*
      * IMPORTANT:
@@ -703,14 +821,14 @@ async function restoreSpotifySession() {
 
     const loginButton = document.querySelector("#spotify-login");
 
-    const logoutButton = document.querySelector("#spotify-logout");
+    const settingsButton = document.querySelector("#settings-button");
 
     if (loginButton) {
       loginButton.removeAttribute("hidden");
     }
 
-    if (logoutButton) {
-      logoutButton.setAttribute("hidden", "");
+    if (settingsButton) {
+      settingsButton.setAttribute("hidden", "");
     }
 
     return false;
@@ -730,14 +848,14 @@ async function restoreSpotifySession() {
 
     const loginButton = document.querySelector("#spotify-login");
 
-    const logoutButton = document.querySelector("#spotify-logout");
+    const settingsButton = document.querySelector("#settings-button");
 
     if (loginButton) {
       loginButton.setAttribute("hidden", "");
     }
 
-    if (logoutButton) {
-      logoutButton.removeAttribute("hidden");
+    if (settingsButton) {
+      settingsButton.removeAttribute("hidden");
     }
 
     await loadHomePlaylists();
@@ -780,7 +898,7 @@ async function waitForSpotifyDevice(deviceId, timeoutMs = 5000) {
       const device = devices.find((item) => item.id === deviceId);
 
       if (device) {
-        console.debug("Betterfy device registered:", device.id);
+        console.debug("Ramify device registered:", device.id);
 
         return device;
       }
@@ -792,7 +910,7 @@ async function waitForSpotifyDevice(deviceId, timeoutMs = 5000) {
   }
 
   throw new Error(
-    "Betterfy playback device did not become available in Spotify.",
+    "Ramify playback device did not become available in Spotify.",
   );
 }
 
@@ -802,7 +920,7 @@ async function ensureSpotifyDeviceReady() {
   }
 
   if (!spotifyDeviceId) {
-    throw new Error("Betterfy playback device is not ready yet.");
+    throw new Error("Ramify playback device is not ready yet.");
   }
 
   if (spotifyDeviceSetupPromise) {
@@ -815,7 +933,7 @@ async function ensureSpotifyDeviceReady() {
 
   spotifyDeviceSetupPromise = (async () => {
     try {
-      console.log("Preparing Betterfy Spotify device:", deviceId);
+      console.log("Preparing Ramify Spotify device:", deviceId);
 
       /*
        * Give Spotify Connect a short
@@ -907,7 +1025,7 @@ function initializeSpotifyPlayer() {
   }
 
   const player = new Spotify.Player({
-    name: "Betterfy Desktop",
+    name: "Ramify",
 
     getOAuthToken: async (callback) => {
       try {
@@ -964,7 +1082,7 @@ function initializeSpotifyPlayer() {
     try {
       await ensureSpotifyDeviceReady();
 
-      console.log("Playback transferred to Betterfy");
+      console.log("Playback transferred to Ramify");
 
       /*
        * Rename Windows audio session
@@ -974,7 +1092,7 @@ function initializeSpotifyPlayer() {
         try {
           await invoke("rename_audio_session");
 
-          console.log("Windows audio session renamed to Betterfy");
+          console.log("Windows audio session renamed to Ramify");
         } catch (error) {
           console.error("Could not rename audio session:", error);
         }
@@ -3566,6 +3684,8 @@ function showHomeView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   searchView?.setAttribute("hidden", "");
 
   playlistsView?.setAttribute("hidden", "");
@@ -3577,6 +3697,8 @@ function showHomeView() {
   similarSection?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   homeView?.removeAttribute("hidden");
 
@@ -3604,6 +3726,8 @@ function showPlaylistsView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3615,6 +3739,8 @@ function showPlaylistsView() {
   similarSection?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   playlistsView?.removeAttribute("hidden");
 
@@ -3642,6 +3768,8 @@ function showPlaylistView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3653,6 +3781,8 @@ function showPlaylistView() {
   similarSection?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   releaseView?.setAttribute("hidden", "");
 
@@ -3680,6 +3810,8 @@ function showQueueView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3691,6 +3823,8 @@ function showQueueView() {
   similarSection?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   queueView?.removeAttribute("hidden");
 
@@ -3716,6 +3850,8 @@ function showSearchView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   playlistsView?.setAttribute("hidden", "");
@@ -3725,6 +3861,8 @@ function showSearchView() {
   queueView?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   releaseView?.setAttribute("hidden", "");
 
@@ -3752,6 +3890,8 @@ function showArtistView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3767,6 +3907,8 @@ function showArtistView() {
   releaseView?.setAttribute("hidden", "");
 
   artistView?.removeAttribute("hidden");
+
+  settingsView?.setAttribute("hidden", "");
 
   discographyView?.setAttribute("hidden", "");
 }
@@ -3790,6 +3932,8 @@ function showArtistDiscographyView() {
 
   const similarSection = document.querySelector("#similar-section");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3801,6 +3945,8 @@ function showArtistDiscographyView() {
   queueView?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   releaseView?.setAttribute("hidden", "");
 
@@ -3828,6 +3974,8 @@ function showReleaseView() {
 
   const discographyView = document.querySelector("#artist-discography-view");
 
+  const settingsView = document.querySelector("#settings-view");
+
   homeView?.setAttribute("hidden", "");
 
   searchView?.setAttribute("hidden", "");
@@ -3839,6 +3987,8 @@ function showReleaseView() {
   queueView?.setAttribute("hidden", "");
 
   artistView?.setAttribute("hidden", "");
+
+  settingsView?.setAttribute("hidden", "");
 
   similarSection?.setAttribute("hidden", "");
 
@@ -3855,6 +4005,38 @@ function clearTransientViews() {
   }
 
   clearSimilarResults();
+}
+
+function showSettingsView() {
+  const views = [
+    "#home-view",
+    "#search-view",
+    "#playlists-view",
+    "#playlist-view",
+    "#queue-view",
+    "#artist-view",
+    "#artist-discography-view",
+    "#release-view",
+    "#similar-section",
+  ];
+
+  views.forEach((selector) => {
+    document.querySelector(selector)?.setAttribute("hidden", "");
+  });
+
+  const settingsView = document.querySelector("#settings-view");
+
+  settingsView?.removeAttribute("hidden");
+
+  updateThemeButtons();
+
+  updateCustomThemeEditor();
+
+  const content = document.querySelector(".content");
+
+  if (content) {
+    content.scrollTop = 0;
+  }
 }
 
 /* =========================
@@ -3880,6 +4062,8 @@ window.onSpotifyWebPlaybackSDKReady = async () => {
 ========================= */
 
 window.addEventListener("DOMContentLoaded", async () => {
+  applyTheme(getSavedTheme());
+
   try {
     await invoke("register_webview_process");
   } catch (error) {
@@ -3892,15 +4076,19 @@ window.addEventListener("DOMContentLoaded", async () => {
     void setBetterfyMemoryMode(true);
   }, 3000);
 
-  startResourceMonitor();
-
-  setTimeout(() => {
-    void setBetterfyMemoryMode(true);
-  }, 3000);
-
   const loginButton = document.querySelector("#spotify-login");
 
+  const settingsButton = document.querySelector("#settings-button");
+
   const logoutButton = document.querySelector("#spotify-logout");
+
+  const closeSettingsButton = document.querySelector("#close-settings");
+
+  const themeButtons = document.querySelectorAll("[data-theme]");
+
+  const customThemeInputs = document.querySelectorAll("[data-theme-variable]");
+
+  const resetCustomThemeButton = document.querySelector("#reset-custom-theme");
 
   const playPauseButton = document.querySelector("#play-pause-button");
 
@@ -3986,7 +4174,58 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   loginButton.addEventListener("click", loginWithSpotify);
 
-  logoutButton.addEventListener("click", logoutSpotify);
+  if (settingsButton) {
+    settingsButton.addEventListener("click", () => {
+      showSettingsView();
+    });
+  }
+
+  if (closeSettingsButton) {
+    closeSettingsButton.addEventListener("click", () => {
+      showHomeView();
+    });
+  }
+
+  if (logoutButton) {
+    logoutButton.addEventListener("click", logoutSpotify);
+  }
+
+  themeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applyTheme(button.dataset.theme);
+    });
+  });
+
+  customThemeInputs.forEach((input) => {
+    input.addEventListener("input", () => {
+      const variable = input.dataset.themeVariable;
+
+      document.documentElement.style.setProperty(variable, input.value);
+
+      document.documentElement.dataset.theme = "custom";
+      localStorage.setItem(THEME_KEY, "custom");
+
+      updateThemeButtons();
+    });
+
+    input.addEventListener("change", () => {
+      const variable = input.dataset.themeVariable;
+
+      const customTheme = getCustomTheme();
+
+      customTheme[variable] = input.value;
+
+      localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(customTheme));
+    });
+  });
+
+  if (resetCustomThemeButton) {
+    resetCustomThemeButton.addEventListener("click", () => {
+      localStorage.removeItem(CUSTOM_THEME_KEY);
+
+      applyTheme("custom");
+    });
+  }
 
   shuffleButton.addEventListener("click", async () => {
     try {
@@ -4456,4 +4695,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   void restoreSpotifySession();
+
+  window.addEventListener("beforeunload", () => {
+    searchAbortController?.abort();
+    searchAbortController = null;
+
+    stopResourceMonitor();
+
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
+    if (spotifyPlayer) {
+      try {
+        spotifyPlayer.disconnect();
+      } catch {
+        // Ignore teardown errors.
+      }
+
+      spotifyPlayer = null;
+    }
+
+    currentPlaylistItems = [];
+    currentPlaylist = null;
+
+    preparedAutoplayUris = [];
+    preparedAutoplaySeedId = null;
+  });
 });

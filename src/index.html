@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <title>Betterfy</title>
+    <title>Ramify</title>
     <link rel="stylesheet" href="styles.css" />
     <script type="module" src="/main.js" defer></script>
   </head>
@@ -17,8 +17,9 @@
       <!-- SIDEBAR -->
       <aside class="sidebar" aria-label="Main navigation">
         <div class="brand-row">
-          <div class="brand-mark" aria-hidden="true">B</div>
-          <strong>Betterfy</strong>
+          <img class="brand-mark" src="./ramify.png" alt="Ramify" />
+
+          <strong>Ramify</strong>
         </div>
 
         <nav class="side-nav">
@@ -41,7 +42,7 @@
         <div class="sidebar-divider"></div>
 
         <div class="sidebar-copy">
-          <span class="eyebrow">BETTERFY</span>
+          <span class="eyebrow">RAMIFY</span>
 
           <p>
             Lightweight Spotify playback with Last.fm-powered recommendations.
@@ -123,12 +124,12 @@
             </button>
 
             <button
-              id="spotify-logout"
+              id="settings-button"
               class="secondary-button"
               type="button"
               hidden
             >
-              Logout
+              ⚙ Settings
             </button>
           </div>
         </header>
@@ -405,6 +406,200 @@
             <p id="queue-status"></p>
 
             <div id="queue-tracks" class="track-list"></div>
+          </section>
+          <!-- SETTINGS VIEW -->
+          <section
+            id="settings-view"
+            class="music-section settings-view"
+            hidden
+          >
+            <div class="settings-header">
+              <button
+                id="close-settings"
+                class="secondary-button"
+                type="button"
+              >
+                ← Back
+              </button>
+
+              <div>
+                <span class="eyebrow">RAMIFY</span>
+                <h2>Settings</h2>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-section appearance-settings">
+                <div class="settings-copy">
+                  <strong>Appearance</strong>
+                  <span>Choose a preset or create your own Ramify theme.</span>
+                </div>
+
+                <div class="theme-grid">
+                  <button
+                    id="theme-dark"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="dark"
+                  >
+                    <span class="theme-preview theme-preview-dark"></span>
+                    <span>Dark</span>
+                  </button>
+
+                  <button
+                    id="theme-light"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="light"
+                  >
+                    <span class="theme-preview theme-preview-light"></span>
+                    <span>Light</span>
+                  </button>
+
+                  <button
+                    id="theme-midnight"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="midnight"
+                  >
+                    <span class="theme-preview theme-preview-midnight"></span>
+                    <span>Midnight</span>
+                  </button>
+
+                  <button
+                    id="theme-purple"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="purple"
+                  >
+                    <span class="theme-preview theme-preview-purple"></span>
+                    <span>Purple</span>
+                  </button>
+
+                  <button
+                    id="theme-ocean"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="ocean"
+                  >
+                    <span class="theme-preview theme-preview-ocean"></span>
+                    <span>Ocean</span>
+                  </button>
+
+                  <button
+                    id="theme-custom"
+                    class="theme-preset"
+                    type="button"
+                    data-theme="custom"
+                  >
+                    <span class="theme-preview theme-preview-custom"></span>
+                    <span>Custom</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="custom-theme-editor" class="custom-theme-editor" hidden>
+                <div class="settings-divider"></div>
+
+                <div class="custom-theme-heading">
+                  <strong>Custom theme</strong>
+                  <span>Choose colors for individual parts of Ramify.</span>
+                </div>
+
+                <div class="custom-color-grid">
+                  <label class="color-setting">
+                    <span>Accent</span>
+
+                    <input
+                      type="color"
+                      value="#1ed760"
+                      data-theme-variable="--accent"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Sidebar</span>
+
+                    <input
+                      type="color"
+                      value="#0f0f0f"
+                      data-theme-variable="--sidebar-bg"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Top bar</span>
+
+                    <input
+                      type="color"
+                      value="#0f0f0f"
+                      data-theme-variable="--topbar-bg"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Player bar</span>
+
+                    <input
+                      type="color"
+                      value="#080808"
+                      data-theme-variable="--player-bg"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Main area</span>
+
+                    <input
+                      type="color"
+                      value="#0f0f0f"
+                      data-theme-variable="--workspace-bg"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Cards</span>
+
+                    <input
+                      type="color"
+                      value="#171717"
+                      data-theme-variable="--panel-2"
+                    />
+                  </label>
+
+                  <label class="color-setting">
+                    <span>Text</span>
+
+                    <input
+                      type="color"
+                      value="#f4f4f4"
+                      data-theme-variable="--text"
+                    />
+                  </label>
+                </div>
+
+                <button
+                  id="reset-custom-theme"
+                  class="secondary-button"
+                  type="button"
+                >
+                  Reset custom theme
+                </button>
+              </div>
+
+              <div class="settings-divider"></div>
+
+              <div class="settings-section">
+                <div class="settings-copy">
+                  <strong>Spotify account</strong>
+                  <span>Disconnect your Spotify account from Ramify.</span>
+                </div>
+
+                <button id="spotify-logout" class="danger-button" type="button">
+                  Log out
+                </button>
+              </div>
+            </div>
           </section>
         </main>
       </div>

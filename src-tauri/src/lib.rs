@@ -549,7 +549,7 @@ fn rename_audio_session() -> Result<(), String> {
                 )
             {
                 let name: Vec<u16> =
-                    "Betterfy"
+                    "Ramify"
                         .encode_utf16()
                         .chain(Some(0))
                         .collect();
