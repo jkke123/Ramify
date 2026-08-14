@@ -2315,10 +2315,11 @@ async function refreshPlaylists() {
   }
 }
 
-async function getPlaylistItems(playlistId) {
+async function getPlaylistItems(playlistId, onFirstPage = null) {
   const allItems = [];
 
   let endpoint = `/playlists/${encodeURIComponent(playlistId)}/items?limit=50`;
+  let firstPage = true;
 
   while (endpoint) {
     const data = await spotifyFetch(endpoint);
@@ -2329,6 +2330,11 @@ async function getPlaylistItems(playlistId) {
       if (compactItem) {
         allItems.push(compactItem);
       }
+    }
+
+    if (firstPage) {
+      firstPage = false;
+      onFirstPage?.(allItems);
     }
 
     if (data.next) {
@@ -2502,12 +2508,27 @@ async function openPlaylist(playlist, returnView = "home") {
 
   markPlaylistOpened(playlist.id);
 
+  const title = document.querySelector("#playlist-title");
+  const container = document.querySelector("#playlist-tracks");
+
+  if (title) {
+    title.textContent = playlist.name ?? "Playlist";
+  }
+
+  if (container) {
+    container.replaceChildren();
+  }
+
+  currentPlaylist = playlist;
+  currentPlaylistItems = [];
+  renderedPlaylistCount = 0;
+
+  showPlaylistView();
+
   try {
-    const data = await getPlaylistItems(playlist.id);
-
-    renderPlaylistTracks(playlist, data.items ?? []);
-
-    showPlaylistView();
+    await getPlaylistItems(playlist.id, (items) => {
+      renderPlaylistTracks(playlist, items);
+    });
   } catch (error) {
     console.error("Could not load playlist:", error);
   }
@@ -2706,21 +2727,13 @@ async function getArtistTopTracks(artist) {
 
   const lastFmTracks = data.toptracks?.track ?? [];
 
-  const spotifyTracks = [];
+  const candidates = lastFmTracks.slice(0, 5);
 
-  for (const lastFmTrack of lastFmTracks.slice(0, 5)) {
-    const spotifyTrack = await findSpotifyTrack(artist.name, lastFmTrack.name);
+  const matches = await Promise.all(
+    candidates.map((track) => findSpotifyTrack(artist.name, track.name)),
+  );
 
-    if (spotifyTrack) {
-      spotifyTracks.push(spotifyTrack);
-    }
-
-    if (spotifyTracks.length === 5) {
-      break;
-    }
-  }
-
-  return spotifyTracks;
+  return matches.filter(Boolean).slice(0, 5);
 }
 
 async function getArtistAlbums(artistId, offset = 0, limit = 10) {
@@ -2887,28 +2900,37 @@ async function openArtist(artist) {
 
   status.textContent = "Loading artist...";
 
+  const topTracksPromise = getArtistTopTracks(artist).then((tracks) => {
+    if (requestId === artistRequestId) {
+      renderArtistTopTracks(tracks);
+    }
+
+    return tracks;
+  });
+
+  const albumsPromise = getArtistAlbums(artist.id, 0, 5).then((albumData) => {
+    if (requestId === artistRequestId) {
+      renderArtistAlbums(albumData.items ?? [], false);
+      setupArtistDiscographyButton(artist, Boolean(albumData.next));
+    }
+
+    return albumData;
+  });
+
   const [topTracksResult, albumsResult] = await Promise.allSettled([
-    getArtistTopTracks(artist),
-    getArtistAlbums(artist.id, 0, 5),
+    topTracksPromise,
+    albumsPromise,
   ]);
 
   if (requestId !== artistRequestId) {
     return;
   }
 
-  if (topTracksResult.status === "fulfilled") {
-    renderArtistTopTracks(topTracksResult.value);
-  } else {
+  if (topTracksResult.status === "rejected") {
     console.error("Could not load artist top tracks:", topTracksResult.reason);
   }
 
-  if (albumsResult.status === "fulfilled") {
-    const albumData = albumsResult.value;
-
-    renderArtistAlbums(albumData.items ?? [], false);
-
-    setupArtistDiscographyButton(artist, Boolean(albumData.next));
-  } else {
+  if (albumsResult.status === "rejected") {
     console.error("Could not load artist albums:", albumsResult.reason);
   }
 
